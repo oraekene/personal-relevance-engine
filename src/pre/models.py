@@ -253,6 +253,36 @@ class ProposedAssertion(Base):
     status: Mapped[str] = mapped_column(String(16), default="pending")
     proposed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decided_via: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )  # 'manual' | 'auto-rule' (audit trail for pre-approved classes)
+
+
+class EntityEmbedding(Base):
+    """A local embedding vector for one Profile/Network/Change entity.
+
+    Stored as a JSON array so the same code runs on SQLite (dev/tests) and Postgres;
+    on Postgres deployments this table migrates to pgvector's `vector` column type for
+    index-backed similarity (see README, ticket 03 notes).
+    """
+
+    __tablename__ = "entity_embeddings"
+    __table_args__ = (
+        UniqueConstraint("entity_type", "entity_id"),
+        CheckConstraint(
+            "entity_type IN ('goal','need','activity','task','tool','person','organization',"
+            "'change')",
+            name="ck_embedding_entity_type",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(16))
+    entity_id: Mapped[int] = mapped_column(Integer)
+    content_hash: Mapped[str] = mapped_column(String(64))  # skip re-embedding unchanged text
+    dim: Mapped[int] = mapped_column(Integer)
+    vector_json: Mapped[list[float]] = mapped_column(JSON)
+    embedded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class SourceSyncState(Base):

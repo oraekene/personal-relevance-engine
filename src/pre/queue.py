@@ -11,7 +11,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pre.models import ProposedAssertion, Tool
+from pre.models import Activity, Need, Person, ProposedAssertion, Tool
 
 # Confidence grows with corroborating observations, capped below certainty.
 _BASE_CONFIDENCE = 0.5
@@ -75,13 +75,17 @@ def list_pending(session: Session) -> list[ProposedAssertion]:
     )
 
 
-def accept(session: Session, proposal_id: int) -> Tool | None:
-    """Apply a pending proposal to the Profile with full provenance."""
+def accept(session: Session, proposal_id: int, decided_via: str = "manual") -> Any:
+    """Apply a pending proposal to the Profile with full provenance.
+
+    Supported entity types: 'tool' (get-or-create), 'person' (Network), and 'activity'
+    (requires payload['need_id'] pointing at an existing Need).
+    """
     prop = session.get(ProposedAssertion, proposal_id)
     if prop is None or prop.status != "pending":
         return None
 
-    applied: Tool | None = None
+    applied: Any = None
     if prop.entity_type == "tool":
         name = str(prop.payload_json.get("name", "")).strip()
         if not name:
@@ -94,11 +98,41 @@ def accept(session: Session, proposal_id: int) -> Tool | None:
         applied.source = f"extraction:{prop.source_tier}"
         applied.confidence = prop.confidence
         applied.last_confirmed_at = datetime.now(UTC)
+    elif prop.entity_type == "person":
+        name = str(prop.payload_json.get("name", "")).strip()
+        if not name:
+            return None
+        applied = session.scalar(select(Person).where(Person.display_name == name))
+        if applied is None:
+            applied = Person(display_name=name)
+            session.add(applied)
+            session.flush()
+        applied.source = f"extraction:{prop.source_tier}"
+        applied.confidence = prop.confidence
+        applied.last_confirmed_at = datetime.now(UTC)
+    elif prop.entity_type == "activity":
+        need_id = prop.payload_json.get("need_id")
+        title = str(prop.payload_json.get("title", "")).strip()
+        if not need_id or not title:
+            return None
+        need = session.get(Need, int(need_id))
+        if need is None:
+            return None
+        applied = Activity(
+            need_id=need.id,
+            title=title,
+            cadence=prop.payload_json.get("cadence"),
+        )
+        applied.source = f"extraction:{prop.source_tier}"
+        applied.confidence = prop.confidence
+        session.add(applied)
+        session.flush()
 
     if applied is None:
         return None
     prop.status = "accepted"
     prop.decided_at = datetime.now(UTC)
+    prop.decided_via = decided_via
     session.commit()
     return applied
 
@@ -109,8 +143,29 @@ def reject(session: Session, proposal_id: int) -> bool:
         return False
     prop.status = "rejected"
     prop.decided_at = datetime.now(UTC)
+    prop.decided_via = "manual"
     session.commit()
     return True
+
+
+# Pre-approved low-risk auto-accept class (ticket 12): high-confidence tool proposals
+# from live connectors. Everything else waits for a human Verdict.
+AUTO_ACCEPT_MIN_CONFIDENCE = 0.85
+_AUTO_ACCEPT_ENTITY = "tool"
+
+
+def run_auto_accept(session: Session) -> int:
+    """Accept the pre-approved low-risk class; every decision is audit-trailed."""
+    applied_count = 0
+    pending = list_pending(session)
+    for prop in pending:
+        eligible = (
+            prop.entity_type == _AUTO_ACCEPT_ENTITY
+            and prop.confidence >= AUTO_ACCEPT_MIN_CONFIDENCE
+        )
+        if eligible and accept(session, prop.id, decided_via="auto-rule") is not None:
+            applied_count += 1
+    return applied_count
 
 
 def render_pending(session: Session) -> str:

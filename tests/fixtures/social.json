@@ -1,0 +1,8 @@
+{
+  "platform": "LinkedIn",
+  "interactions": [
+    {"type": "dm", "date": "2026-08-01", "person": "Maya Chen"},
+    {"type": "dm", "date": "2026-08-02", "person": "Maya Chen"},
+    {"type": "like", "date": "2026-08-03"}
+  ]
+}

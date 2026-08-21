@@ -11,10 +11,13 @@ from pre.change_corpus import ingest_entries
 from pre.db import DEFAULT_DB_URL, init_db, make_engine, make_session_factory
 from pre.firehose import fetch_feed, parse_feed
 from pre.intake import apply_intake_file
+from pre.live import import_live_file
 from pre.models import Change
 from pre.queue import accept, reject, render_pending
+from pre.retrieval import index_all, render_shortlist, shortlist_for_change
 from pre.taxonomy import DIMENSIONS, validate
 from pre.tranche1 import import_source_file
+from pre.tranche2 import import_tranche2_file
 from pre.view import render_profile
 from pre.watchlist import active_watchlist_product_names, sync_watchlist
 
@@ -58,6 +61,28 @@ def _build_parser() -> argparse.ArgumentParser:
     rej = sub.add_parser("reject", help="Reject a proposal by id")
     add_db(rej)
     rej.add_argument("id", type=int)
+
+    idx = sub.add_parser("index", help="(Re)index Profile, Network, and Change embeddings")
+    add_db(idx)
+
+    sl = sub.add_parser("shortlist", help="Inspect the candidate shortlist for one Change")
+    add_db(sl)
+    sl.add_argument("change_id", type=int)
+    sl.add_argument("--top", type=int, default=8)
+
+    imp2 = sub.add_parser(
+        "import2", help="Import a tranche-2 source file (comms/notes/social)"
+    )
+    add_db(imp2)
+    imp2.add_argument("--kind", required=True, choices=["comms", "notes", "social"])
+    imp2.add_argument("--file", required=True)
+
+    live = sub.add_parser(
+        "import-live", help="Pull a live-connector document (calendar/email)"
+    )
+    add_db(live)
+    live.add_argument("--kind", required=True, choices=["calendar", "email"])
+    live.add_argument("--file", required=True)
     return parser
 
 
@@ -206,6 +231,71 @@ def _cmd_reject(args: argparse.Namespace) -> int:
         session.close()
 
 
+def _cmd_index(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        counts = index_all(session)
+        print(
+            f"Indexed {counts['entities']} entities, {counts['changes']} changes "
+            f"({counts['skipped']} unchanged, skipped)."
+        )
+        return 0
+    finally:
+        session.close()
+
+
+def _cmd_shortlist(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+
+        change = session.get(Change, args.change_id)
+        if change is None:
+            print(f"change #{args.change_id} not found", file=sys.stderr)
+            return 1
+        candidates = shortlist_for_change(session, args.change_id, top_k=args.top)
+        print(render_shortlist(change, candidates))
+        return 0
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        session.close()
+
+
+def _cmd_import2(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        result = import_tranche2_file(session, args.kind, args.file)
+        print(
+            f"Imported {args.kind}:{args.file} — {result['proposals_new']} new proposals, "
+            f"{result['strengthened']} strengthened, "
+            f"{result['skipped_already_in_profile']} skipped (already in Profile)."
+        )
+        return 0
+    except Exception as exc:  # noqa: BLE001 -- CLI boundary; print any failure readably
+        print(f"import2 failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        session.close()
+
+
+def _cmd_import_live(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        result = import_live_file(session, args.kind, args.file)
+        print(
+            f"Pulled live-{args.kind}:{args.file} — {result['proposals_new']} new proposals, "
+            f"{result['strengthened']} strengthened, {result['auto_accepted']} auto-accepted "
+            f"(pre-approved class)."
+        )
+        return 0
+    except Exception as exc:  # noqa: BLE001 -- CLI boundary; print any failure readably
+        print(f"import-live failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        session.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     handlers = {
@@ -218,6 +308,10 @@ def main(argv: list[str] | None = None) -> int:
         "queue": _cmd_queue,
         "accept": _cmd_accept,
         "reject": _cmd_reject,
+        "index": _cmd_index,
+        "shortlist": _cmd_shortlist,
+        "import2": _cmd_import2,
+        "import-live": _cmd_import_live,
     }
     return handlers[args.command](args)
 
