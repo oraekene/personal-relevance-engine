@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>GitHub Changelog</title>
+    <link>https://github.blog/changelog</link>
+    <description>Fixture feed for tests</description>
+    <item>
+      <title>Deprecation notice: legacy Actions runner images</title>
+      <link>https://github.blog/changelog/2026-01-01-runner-deprecation</link>
+      <category>Actions</category>
+      <pubDate>Mon, 01 Sep 2026 09:00:00 +0000</pubDate>
+      <description>We are sunsetting the legacy runner images. Workloads must migrate.</description>
+    </item>
+    <item>
+      <title>Pricing update for Teams plans</title>
+      <link>https://github.blog/changelog/2026-01-02-pricing</link>
+      <category>Enterprise</category>
+      <pubDate>Tue, 02 Sep 2026 10:00:00 +0000</pubDate>
+      <description>Billing changes for Teams subscriptions take effect next cycle.</description>
+    </item>
+    <item>
+      <title>Security patch for CVE-2026-1234 in dependency graph</title>
+      <link>https://github.blog/changelog/2026-01-03-security</link>
+      <category>Security</category>
+      <pubDate>Wed, 03 Sep 2026 11:00:00 +0000</pubDate>
+      <description>A vulnerability was patched; no action required.</description>
+    </item>
+    <item>
+      <title>Code search is faster on large monorepos</title>
+      <link>https://github.blog/changelog/2026-01-04-search</link>
+      <category>Features</category>
+      <pubDate>Thu, 04 Sep 2026 12:00:00 +0000</pubDate>
+      <description>Performance improvements for code search queries.</description>
+    </item>
+  </channel>
+</rss>

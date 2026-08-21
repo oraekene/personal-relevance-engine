@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     DateTime,
     Float,
@@ -178,6 +179,94 @@ class NetworkLink(Base, ProvenanceMixin):
 
     person: Mapped[Person | None] = relationship()
     organization: Mapped[Organization | None] = relationship()
+
+
+class WatchlistItem(Base):
+    """A product monitored for Changes because it is a Tool in the Profile."""
+
+    __tablename__ = "watchlist"
+    __table_args__ = (UniqueConstraint("tool_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tool_id: Mapped[int] = mapped_column(ForeignKey("tools.id"))
+    active: Mapped[bool] = mapped_column(default=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    deactivated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    tool: Mapped[Tool] = relationship()
+
+
+class Change(Base):
+    """One deduplicated unit of product news in the corpus.
+
+    Not an assertion about the user, so no ProvenanceMixin: provenance lives in
+    `sources` (every firehose/watchlist lane that reported this same Change).
+    """
+
+    __tablename__ = "changes"
+    __table_args__ = (UniqueConstraint("fingerprint"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_name: Mapped[str] = mapped_column(String(128))
+    title: Mapped[str] = mapped_column(String(512))
+    url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    change_type: Mapped[str] = mapped_column(String(16))  # feature|improvement|deprecation|pricing|policy|security
+    is_pricing: Mapped[bool] = mapped_column(default=False)
+    is_deprecation: Mapped[bool] = mapped_column(default=False)
+    is_security: Mapped[bool] = mapped_column(default=False)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    sources_json: Mapped[list[dict[str, str]]] = mapped_column(
+        JSON, default=list
+    )  # [{source,url}]
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class ProposedAssertion(Base):
+    """An extraction candidate awaiting the user's accept/reject decision.
+
+    Never writes the Profile directly (spec: confirmation queue). Uniqueness on
+    (payload_key, source_tier) makes re-imports idempotent; repeat observations
+    strengthen confidence instead of duplicating.
+    """
+
+    __tablename__ = "proposed_assertions"
+    __table_args__ = (
+        UniqueConstraint("payload_key", "source_tier"),
+        CheckConstraint("status IN ('pending','accepted','rejected')", name="ck_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(32))  # e.g. 'tool'
+    payload_key: Mapped[str] = mapped_column(String(256))
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    source_tier: Mapped[str] = mapped_column(String(32))  # takeout|financial|commerce
+    source_ref: Mapped[str] = mapped_column(String(256))
+    row_hash: Mapped[str] = mapped_column(String(64))
+    confidence: Mapped[float] = mapped_column(Float, default=0.5)
+    observations: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    proposed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SourceSyncState(Base):
+    """Per-source ingestion state: distinguishes first connect (full history) from deltas."""
+
+    __tablename__ = "source_sync_state"
+    __table_args__ = (UniqueConstraint("tier", "source_ref"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tier: Mapped[str] = mapped_column(String(32))
+    source_ref: Mapped[str] = mapped_column(String(256))
+    first_sync_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_sync_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    records_seen: Mapped[int] = mapped_column(Integer, default=0)
 
 
 def provenance_of(obj: Any) -> dict[str, Any]:
