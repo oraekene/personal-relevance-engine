@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "personal-relevance-engine"
+version = "0.1.0"
+description = "Filters product changes down to the ones that matter to one person's life."
+requires-python = ">=3.11"
+dependencies = [
+    "sqlalchemy>=2.0,<3",
+    "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "mypy>=1.8",
+    "ruff>=0.4",
+    "types-PyYAML",
+]
+
+[project.scripts]
+pre = "pre.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
