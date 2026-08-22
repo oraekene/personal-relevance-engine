@@ -11,7 +11,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pre.models import Activity, Need, Person, ProposedAssertion, Tool
+from pre.models import Activity, Need, NetworkLink, Person, ProposedAssertion, Tool
 
 # Confidence grows with corroborating observations, capped below certainty.
 _BASE_CONFIDENCE = 0.5
@@ -27,6 +27,7 @@ class Proposal:
     source_tier: str
     source_ref: str
     confidence: float = _BASE_CONFIDENCE
+    dimension_code: str | None = None
 
 
 def row_hash(tier: str, source_ref: str, row_key: str) -> str:
@@ -59,6 +60,7 @@ def propose(session: Session, proposal: Proposal) -> ProposedAssertion:
         source_ref=proposal.source_ref,
         row_hash=row_hash(proposal.source_tier, proposal.source_ref, proposal.payload_key),
         confidence=min(_MAX_CONFIDENCE, proposal.confidence),
+        dimension_code=proposal.dimension_code,
     )
     session.add(row)
     session.commit()
@@ -110,6 +112,32 @@ def accept(session: Session, proposal_id: int, decided_via: str = "manual") -> A
         applied.source = f"extraction:{prop.source_tier}"
         applied.confidence = prop.confidence
         applied.last_confirmed_at = datetime.now(UTC)
+        # Relationship context (ticket 10): accepting a person also writes their
+        # NetworkLink when the proposal carries relationship fields.
+        has_link_context = any(
+            prop.payload_json.get(key)
+            for key in ("frequency", "recency", "role", "dimension_code")
+        )
+        link_tiers = ("comms", "social", "contacts", "live-email")
+        if has_link_context or prop.source_tier in link_tiers:
+            existing_link = session.scalar(
+                select(NetworkLink).where(
+                    NetworkLink.person_id == applied.id,
+                    NetworkLink.source == f"extraction:{prop.source_tier}",
+                )
+            )
+            if existing_link is None:
+                session.add(
+                    NetworkLink(
+                        person_id=applied.id,
+                        role=prop.payload_json.get("role"),
+                        frequency=prop.payload_json.get("frequency"),
+                        recency=prop.payload_json.get("recency"),
+                        dimension_code=prop.payload_json.get("dimension_code"),
+                        source=f"extraction:{prop.source_tier}",
+                        confidence=prop.confidence,
+                    )
+                )
     elif prop.entity_type == "activity":
         need_id = prop.payload_json.get("need_id")
         title = str(prop.payload_json.get("title", "")).strip()

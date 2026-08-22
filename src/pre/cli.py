@@ -4,20 +4,26 @@ from __future__ import annotations
 
 import argparse
 import sys
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from pre.change_corpus import ingest_entries
+from pre.cost_meter import BudgetExceeded, check_cap, render_costs
+from pre.coverage import render_coverage
 from pre.db import DEFAULT_DB_URL, init_db, make_engine, make_session_factory
 from pre.firehose import fetch_feed, parse_feed
 from pre.intake import apply_intake_file
+from pre.judge import JudgeVerdict, LLMJudge
 from pre.live import import_live_file
 from pre.models import Change
 from pre.queue import accept, reject, render_pending
 from pre.retrieval import index_all, render_shortlist, shortlist_for_change
+from pre.scoring import judge_change, render_scores
 from pre.taxonomy import DIMENSIONS, validate
 from pre.tranche1 import import_source_file
 from pre.tranche2 import import_tranche2_file
+from pre.tranche3 import import_tranche3_file
 from pre.view import render_profile
 from pre.watchlist import active_watchlist_product_names, sync_watchlist
 
@@ -83,6 +89,28 @@ def _build_parser() -> argparse.ArgumentParser:
     add_db(live)
     live.add_argument("--kind", required=True, choices=["calendar", "email"])
     live.add_argument("--file", required=True)
+
+    imp3 = sub.add_parser(
+        "import3", help="Import a tranche-3 source file (device/health/work-systems)"
+    )
+    add_db(imp3)
+    imp3.add_argument("--kind", required=True, choices=["device", "health", "work-systems"])
+    imp3.add_argument("--file", required=True)
+
+    judge = sub.add_parser("judge", help="Run the judge on a Change's shortlist")
+    add_db(judge)
+    judge.add_argument("change_id", type=int)
+    judge.add_argument("--top", type=int, default=8)
+    judge.add_argument(
+        "--llm", action="store_true",
+        help="Use the configured LLM API (default: scripted demo judge)",
+    )
+
+    costs_cmd = sub.add_parser("costs", help="LLM spend month-to-date vs cap")
+    add_db(costs_cmd)
+
+    cov = sub.add_parser("coverage", help="Profile coverage across the 17 Life Dimensions")
+    add_db(cov)
     return parser
 
 
@@ -296,6 +324,97 @@ def _cmd_import_live(args: argparse.Namespace) -> int:
         session.close()
 
 
+def _cmd_import3(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        result = import_tranche3_file(session, args.kind, args.file)
+        print(
+            f"Imported {args.kind}:{args.file} — {result['proposals_new']} new proposals, "
+            f"{result['strengthened']} strengthened."
+        )
+        return 0
+    except Exception as exc:  # noqa: BLE001 -- CLI boundary; print any failure readably
+        print(f"import3 failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        session.close()
+
+
+class _DemoJudge:
+    """Deterministic offline judge for local runs (no API needed).
+
+    Scores lexical overlap between the Change text and the candidate label — a
+    stand-in for LLMJudge so the pipeline is runnable without credentials.
+    """
+
+    name = "demo:lexical"
+
+    def score(self, session, change, candidates):  # type: ignore[no-untyped-def]
+        from pre.embeddings import HashingEmbedder, cosine
+
+        embedder = HashingEmbedder()
+        query = embedder.embed(f"{change.product_name} {change.title}")
+        verdicts = []
+        for c in candidates:
+            score = round(cosine(query, embedder.embed(c.label)) * 100)
+            verdicts.append(
+                JudgeVerdict(
+                    entity_type=c.entity_type,
+                    entity_id=c.entity_id,
+                    score=score,
+                    reasoning=(
+                        f"lexical similarity between the change and this "
+                        f"{c.entity_type} ('{c.label}')"
+                    ),
+                )
+            )
+        return verdicts
+
+
+def _cmd_judge(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        if args.llm:
+            judge: Any = LLMJudge()
+        else:
+            judge = _DemoJudge()
+        written = judge_change(session, args.change_id, judge, top_k=args.top)
+        status = check_cap(session)
+        print(
+            f"Judged change #{args.change_id}: {written} scores stored. "
+            f"Spend MTD {status.spent_cents}/{status.cap_cents} cents "
+            f"({status.pct_used:.0%})."
+        )
+        print(render_scores(session, args.change_id))
+        return 0
+    except BudgetExceeded as exc:
+        print(f"budget: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 -- CLI boundary; print any failure readably
+        print(f"judge failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        session.close()
+
+
+def _cmd_costs(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        print(render_costs(session))
+        return 0
+    finally:
+        session.close()
+
+
+def _cmd_coverage(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        print(render_coverage(session))
+        return 0
+    finally:
+        session.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     handlers = {
@@ -312,6 +431,10 @@ def main(argv: list[str] | None = None) -> int:
         "shortlist": _cmd_shortlist,
         "import2": _cmd_import2,
         "import-live": _cmd_import_live,
+        "import3": _cmd_import3,
+        "judge": _cmd_judge,
+        "costs": _cmd_costs,
+        "coverage": _cmd_coverage,
     }
     return handlers[args.command](args)
 

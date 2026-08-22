@@ -245,7 +245,7 @@ class ProposedAssertion(Base):
     entity_type: Mapped[str] = mapped_column(String(32))  # e.g. 'tool'
     payload_key: Mapped[str] = mapped_column(String(256))
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    source_tier: Mapped[str] = mapped_column(String(32))  # takeout|financial|commerce
+    source_tier: Mapped[str] = mapped_column(String(32))  # takeout|financial|commerce|...
     source_ref: Mapped[str] = mapped_column(String(256))
     row_hash: Mapped[str] = mapped_column(String(64))
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
@@ -256,6 +256,9 @@ class ProposedAssertion(Base):
     decided_via: Mapped[str | None] = mapped_column(
         String(16), nullable=True
     )  # 'manual' | 'auto-rule' (audit trail for pre-approved classes)
+    dimension_code: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )  # Life Dimension hint for the coverage report (ticket 11)
 
 
 class EntityEmbedding(Base):
@@ -297,6 +300,38 @@ class SourceSyncState(Base):
     first_sync_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_sync_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     records_seen: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class LLMCallLog(Base):
+    """Cost meter: one row per LLM API call (ticket 04 doctrine: metered and capped)."""
+
+    __tablename__ = "llm_call_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    purpose: Mapped[str] = mapped_column(String(32))  # 'judge' | ...
+    model: Mapped[str] = mapped_column(String(64))
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd_cents: Mapped[float] = mapped_column(Float, default=0.0)
+    change_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    called_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ChangeScore(Base):
+    """The judge's verdict for one Change × Profile entity pair (stage 3 of the funnel)."""
+
+    __tablename__ = "change_scores"
+    __table_args__ = (UniqueConstraint("change_id", "entity_type", "entity_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    change_id: Mapped[int] = mapped_column(ForeignKey("changes.id"))
+    entity_type: Mapped[str] = mapped_column(String(16))
+    entity_id: Mapped[int] = mapped_column(Integer)
+    score: Mapped[int] = mapped_column(Integer)  # 0-100 relevance
+    reasoning: Mapped[str] = mapped_column(String(1024), default="")
+    judge_name: Mapped[str] = mapped_column(String(64))
+    call_id: Mapped[int | None] = mapped_column(ForeignKey("llm_call_log.id"), nullable=True)
+    scored_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 def provenance_of(obj: Any) -> dict[str, Any]:

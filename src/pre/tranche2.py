@@ -1,16 +1,19 @@
-"""Tranche-2 extraction: comms, productivity/notes, social/content.
+"""Tranche-2 extraction: comms, productivity/notes, social/content, contacts.
 
 Canonical export shapes (v1 contract, same doctrine as tranche 1):
 
-- comms JSON:   [{"from": "Name <a@b>", "to": ["..."], "date": "iso"}, ...]
-- notes JSON:   {"app": "Obsidian", "pages": [{"title": "...", "updated": "iso"}, ...]}
-- social JSON:  {"platform": "LinkedIn",
-                 "interactions": [{"type": "post|like|dm", "date": "iso",
-                                   "person": "Name"?}, ...]}
+- comms JSON:     [{"from": "Name <a@b>", "date": "iso"}, ...]
+- notes JSON:     {"app": "Obsidian", "pages": [{"title": "...", "updated": "iso"}, ...]}
+- social JSON:    {"platform": "LinkedIn",
+                   "interactions": [{"type": "post|like|dm", "date": "iso",
+                                     "person": "Name"?}, ...]}
+- contacts JSON:  [{"name": "...", "organization": "...?", "title": "...?",
+                    "dimension": "...?"}, ...]
 
-Comms and social interactions propose People (Network cluster); the notes app and
-social platform propose themselves as Tools; known vendors named in note titles do too.
-Proposals deduplicate against Tools already in the Profile.
+Comms and social interactions propose People (Network cluster) WITH relationship context
+(frequency, recency); the notes app and social platform propose themselves as Tools;
+known vendors named in note titles do too. Proposals deduplicate against Tools already
+in the Profile.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pre.models import SourceSyncState, Tool
+from pre.network_extract import enrich_person_proposal
 from pre.queue import Proposal, propose
 
 _EMAIL_NAME = re.compile(r"^(.*?)\s*<")
@@ -47,29 +52,46 @@ _KNOWN_VENDORS = (
 )
 
 
+def _iso(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
 def parse_comms_json(path: str | Path) -> list[Proposal]:
     """Frequent correspondents -> Person proposals for the Network cluster.
 
     Only the 'from' side counts: the user appears in 'to' of every message.
+    Proposals carry relationship context (frequency, recency) for the NetworkLink.
     """
     messages: list[dict[str, Any]] = json.loads(Path(path).read_text(encoding="utf-8"))
     counts: Counter[str] = Counter()
+    last_seen: dict[str, str] = {}
     for message in messages:
         sender = message.get("from")
         if not sender:
             continue
         name = _display_name(str(sender))
-        if name:
-            counts[name] += 1
+        if not name:
+            continue
+        counts[name] += 1
+        date = str(message.get("date", "")).strip()
+        if date:
+            last_seen[name] = max(last_seen.get(name, ""), date)
 
     return [
-        Proposal(
-            entity_type="person",
-            payload_key=f"person:{name.lower()}",
-            payload={"name": name, "messages": occurrences},
-            source_tier="comms",
-            source_ref=str(path),
-            confidence=min(0.95, 0.5 + 0.1 * (occurrences - 1)),
+        enrich_person_proposal(
+            Proposal(
+                entity_type="person",
+                payload_key=f"person:{name.lower()}",
+                payload={"name": name, "messages": occurrences},
+                source_tier="comms",
+                source_ref=str(path),
+                confidence=min(0.95, 0.5 + 0.1 * (occurrences - 1)),
+            ),
+            occurrences=occurrences,
+            last_seen=_iso(last_seen[name]) if name in last_seen else None,
         )
         for name, occurrences in sorted(counts.items())
     ]
@@ -128,28 +150,44 @@ def parse_social_json(path: str | Path) -> list[Proposal]:
             )
         )
     people: Counter[str] = Counter()
+    people_last: dict[str, str] = {}
     for interaction in interactions:
         person = str(interaction.get("person", "")).strip()
         if person:
             people[person] += 1
+            date = str(interaction.get("date", "")).strip()
+            if date:
+                people_last[person] = max(people_last.get(person, ""), date)
     for name, occurrences in sorted(people.items()):
         proposals.append(
-            Proposal(
-                entity_type="person",
-                payload_key=f"person:{name.lower()}",
-                payload={"name": name, "interactions": occurrences},
-                source_tier="social",
-                source_ref=str(path),
-                confidence=min(0.9, 0.45 + 0.15 * (occurrences - 1)),
+            enrich_person_proposal(
+                Proposal(
+                    entity_type="person",
+                    payload_key=f"person:{name.lower()}",
+                    payload={"name": name, "interactions": occurrences},
+                    source_tier="social",
+                    source_ref=str(path),
+                    confidence=min(0.9, 0.45 + 0.15 * (occurrences - 1)),
+                ),
+                occurrences=occurrences,
+                last_seen=_iso(people_last[name]) if name in people_last else None,
             )
         )
     return proposals
+
+
+def parse_contacts_json(path: str | Path) -> list[Proposal]:
+    """Contacts export (see network_extract.parse_contacts_json) as a tranche-2 kind."""
+    from pre.network_extract import parse_contacts_json as _parse
+
+    return _parse(path)
 
 
 PARSERS = {
     "comms": parse_comms_json,
     "notes": parse_notes_json,
     "social": parse_social_json,
+    "contacts": parse_contacts_json,
 }
 
 
