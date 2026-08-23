@@ -334,6 +334,66 @@ class ChangeScore(Base):
     scored_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ThresholdCell(Base):
+    """One cell of the relevance matrix: digest type x Life Dimension (2 x 17 = 34).
+
+    Cells initialize at digest defaults and are differentiated by Verdict calibration
+    or hand-override; `tuning` records which ('default' | 'calibrated' | 'manual').
+    """
+
+    __tablename__ = "threshold_cells"
+    __table_args__ = (
+        UniqueConstraint("digest_kind", "dimension_code"),
+        CheckConstraint("digest_kind IN ('daily','weekly')", name="ck_digest_kind"),
+        CheckConstraint("min_score BETWEEN 0 AND 100", name="ck_min_score_range"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    digest_kind: Mapped[str] = mapped_column(String(8))
+    dimension_code: Mapped[str] = mapped_column(String(32))
+    min_score: Mapped[int] = mapped_column(Integer)
+    tuning: Mapped[str] = mapped_column(String(16), default="default")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class DigestItem(Base):
+    """One assembled Digest entry: a judged Change matched to its best Profile entity."""
+
+    __tablename__ = "digest_items"
+    __table_args__ = (
+        UniqueConstraint("digest_kind", "change_id"),
+        CheckConstraint("verdict IS NULL OR verdict IN ('act','dismiss')", name="ck_verdict"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    digest_kind: Mapped[str] = mapped_column(String(8))
+    change_id: Mapped[int] = mapped_column(ForeignKey("changes.id"))
+    score: Mapped[int] = mapped_column(Integer)
+    entity_type: Mapped[str] = mapped_column(String(16))
+    entity_id: Mapped[int] = mapped_column(Integer)
+    entity_label: Mapped[str] = mapped_column(String(256))
+    dimension_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    reasoning: Mapped[str] = mapped_column(String(1024), default="")
+    unscored: Mapped[bool] = mapped_column(default=False)  # cold-start urgent notices
+    assembled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verdict: Mapped[str | None] = mapped_column(String(8), nullable=True)
+
+
+class SystemFlag(Base):
+    """Key-value system state (cold-start mode, go-live timestamp, ...)."""
+
+    __tablename__ = "system_flags"
+    __table_args__ = (UniqueConstraint("key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(64))
+    value: Mapped[str] = mapped_column(String(256))
+    set_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 def provenance_of(obj: Any) -> dict[str, Any]:
     """Read an assertion's provenance as a plain dict."""
     return {

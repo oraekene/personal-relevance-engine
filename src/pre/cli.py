@@ -9,9 +9,17 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from pre.change_corpus import ingest_entries
+from pre.coldstart import (
+    SHADOW,
+    coverage_gate,
+    get_mode,
+    go_live,
+    render_spot_check,
+)
 from pre.cost_meter import BudgetExceeded, check_cap, render_costs
 from pre.coverage import render_coverage
 from pre.db import DEFAULT_DB_URL, init_db, make_engine, make_session_factory
+from pre.digest import assemble_digest, render_digest, render_matrix, set_cell
 from pre.firehose import fetch_feed, parse_feed
 from pre.intake import apply_intake_file
 from pre.judge import JudgeVerdict, LLMJudge
@@ -80,7 +88,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "import2", help="Import a tranche-2 source file (comms/notes/social)"
     )
     add_db(imp2)
-    imp2.add_argument("--kind", required=True, choices=["comms", "notes", "social"])
+    imp2.add_argument("--kind", required=True,
+                      choices=["comms", "notes", "social", "contacts"])
     imp2.add_argument("--file", required=True)
 
     live = sub.add_parser(
@@ -111,6 +120,25 @@ def _build_parser() -> argparse.ArgumentParser:
 
     cov = sub.add_parser("coverage", help="Profile coverage across the 17 Life Dimensions")
     add_db(cov)
+
+    matrix = sub.add_parser("matrix", help="Show the 34-cell threshold matrix")
+    add_db(matrix)
+    matrix.add_argument("--set", nargs=2, metavar=("KIND:DIM", "SCORE"),
+                        help="Override one cell, e.g. --set daily:business 70")
+
+    dig = sub.add_parser("digest", help="Assemble + render a Digest")
+    add_db(dig)
+    dig.add_argument("--kind", default="daily", choices=["daily", "weekly"])
+    dig.add_argument("--limit", type=int)
+
+    mode_cmd = sub.add_parser("mode", help="Show cold-start mode (shadow/live)")
+    add_db(mode_cmd)
+
+    golive = sub.add_parser("go-live", help="Attempt go-live (coverage gate must pass)")
+    add_db(golive)
+
+    spot = sub.add_parser("spot-check", help="Review judge scores by band for calibration sanity")
+    add_db(spot)
     return parser
 
 
@@ -415,6 +443,78 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
         session.close()
 
 
+def _cmd_matrix(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        if args.set:
+            kind_dim, score_text = args.set
+            kind, _, dim = kind_dim.partition(":")
+            try:
+                set_cell(session, kind, dim, int(score_text), tuning="manual")
+            except ValueError as exc:
+                print(f"matrix set failed: {exc}", file=sys.stderr)
+                return 1
+        print(render_matrix(session))
+        return 0
+    finally:
+        session.close()
+
+
+def _cmd_digest(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        mode = get_mode(session)
+        assemble_digest(session, args.kind, limit=args.limit, shadow=(mode == SHADOW))
+        print(render_digest(session, args.kind))
+        return 0
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        session.close()
+
+
+def _cmd_mode(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        mode = get_mode(session)
+        gate = coverage_gate(session)
+        print(f"mode: {mode}")
+        print(
+            f"coverage gate: {'PASS' if gate.passed else 'NOT PASSED'} "
+            f"({gate.dimensions_touched} dimensions touched, {gate.corpus_changes} corpus, "
+            f"{gate.judged_changes} judged)"
+        )
+        for failure in gate.failures:
+            print(f"  - {failure}")
+        return 0
+    finally:
+        session.close()
+
+
+def _cmd_go_live(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        result = go_live(session)
+        print(f"GO-LIVE complete. Gate: {result.dimensions_touched} dimensions, "
+              f"{result.corpus_changes} corpus changes, {result.judged_changes} judged.")
+        return 0
+    except PermissionError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        session.close()
+
+
+def _cmd_spot_check(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        print(render_spot_check(session))
+        return 0
+    finally:
+        session.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     handlers = {
@@ -435,6 +535,11 @@ def main(argv: list[str] | None = None) -> int:
         "judge": _cmd_judge,
         "costs": _cmd_costs,
         "coverage": _cmd_coverage,
+        "matrix": _cmd_matrix,
+        "digest": _cmd_digest,
+        "mode": _cmd_mode,
+        "go-live": _cmd_go_live,
+        "spot-check": _cmd_spot_check,
     }
     return handlers[args.command](args)
 
