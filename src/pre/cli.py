@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from pre.calibration import render_calibration
 from pre.change_corpus import ingest_entries
 from pre.coldstart import (
     SHADOW,
@@ -32,6 +33,7 @@ from pre.taxonomy import DIMENSIONS, validate
 from pre.tranche1 import import_source_file
 from pre.tranche2 import import_tranche2_file
 from pre.tranche3 import import_tranche3_file
+from pre.verdicts import record_verdict, render_verdict_summary
 from pre.view import render_profile
 from pre.watchlist import active_watchlist_product_names, sync_watchlist
 
@@ -139,6 +141,24 @@ def _build_parser() -> argparse.ArgumentParser:
 
     spot = sub.add_parser("spot-check", help="Review judge scores by band for calibration sanity")
     add_db(spot)
+
+    cal = sub.add_parser("calibrate", help="Re-fit threshold cells from recorded Verdicts")
+    add_db(cal)
+
+    verd = sub.add_parser("verdict", help="Record a Verdict on a Digest item")
+    add_db(verd)
+    verd.add_argument("item_id", type=int)
+    verd.add_argument("choice", choices=["act", "dismiss"])
+    verd.add_argument("--channel", default="cli", choices=["cli", "web", "push"])
+
+    vsum = sub.add_parser("verdicts", help="Recent Verdict summary")
+    add_db(vsum)
+
+    serve = sub.add_parser(
+        "serve", help="Run the web surface (uvicorn) for anywhere access"
+    )
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8787)
     return parser
 
 
@@ -515,6 +535,52 @@ def _cmd_spot_check(args: argparse.Namespace) -> int:
         session.close()
 
 
+def _cmd_calibrate(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        print(render_calibration(session))
+        return 0
+    finally:
+        session.close()
+
+
+def _cmd_verdict(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        log_row = record_verdict(session, args.item_id, args.choice, channel=args.channel)
+        print(
+            f"Verdict '{args.choice}' recorded on item #{args.item_id} "
+            f"(profile v{log_row.profile_version}, via {args.channel})."
+        )
+        return 0
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        session.close()
+
+
+def _cmd_verdicts(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        print(render_verdict_summary(session))
+        return 0
+    finally:
+        session.close()
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    try:
+        import uvicorn  # type: ignore[import-not-found]
+
+        from pre.web import create_app
+    except ImportError as exc:  # pragma: no cover - depends on [serve] extra
+        print(f"serve requires the [serve] extra: pip install '.[serve]' ({exc})", file=sys.stderr)
+        return 1
+    uvicorn.run(create_app(), host=args.host, port=args.port)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     handlers = {
@@ -540,6 +606,10 @@ def main(argv: list[str] | None = None) -> int:
         "mode": _cmd_mode,
         "go-live": _cmd_go_live,
         "spot-check": _cmd_spot_check,
+        "calibrate": _cmd_calibrate,
+        "verdict": _cmd_verdict,
+        "verdicts": _cmd_verdicts,
+        "serve": _cmd_serve,
     }
     return handlers[args.command](args)
 

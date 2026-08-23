@@ -195,6 +195,10 @@ def apply_intake_dict(session: Session, data: dict[str, Any]) -> IntakeSummary:
     except Exception:
         session.rollback()
         raise
+    from pre.verdicts import bump_profile_version
+
+    if summary.total() > 0:
+        bump_profile_version(session)
     return summary
 
 

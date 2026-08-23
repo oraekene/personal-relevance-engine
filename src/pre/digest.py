@@ -11,6 +11,9 @@ at the digest's item limit.
 
 from __future__ import annotations
 
+import os
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -141,6 +144,39 @@ def _entity_label(session: Session, entity_type: str, entity_id: int) -> str:
     return label
 
 
+DEFAULT_STALENESS_DAYS = 90
+
+
+def staleness_cutoff(now: datetime | None = None) -> datetime:
+    raw = os.environ.get("PRE_STALENESS_DAYS", "")
+    try:
+        days = int(raw) if raw else DEFAULT_STALENESS_DAYS
+    except ValueError:
+        days = DEFAULT_STALENESS_DAYS
+    return (now or datetime.now(UTC)) - timedelta(days=days)
+
+
+def _entity_is_stale(session: Session, entity_type: str, entity_id: int) -> bool:
+    """True when the matched assertion hasn't been confirmed within the staleness window."""
+    model = {
+        "goal": Goal,
+        "need": Need,
+        "activity": Activity,
+        "task": Task,
+        "tool": Tool,
+    }.get(entity_type)
+    row = model and session.get(model, entity_id)
+    if row is None:
+        return False
+    confirmed: datetime | None = getattr(row, "last_confirmed_at", None)
+    if confirmed is None:
+        return False
+    if confirmed.tzinfo is None:
+        confirmed = confirmed.replace(tzinfo=UTC)  # SQLite returns naive datetimes
+    is_stale: bool = confirmed < staleness_cutoff()
+    return is_stale
+
+
 def assemble_digest(
     session: Session,
     kind: str,
@@ -157,10 +193,13 @@ def assemble_digest(
     cap = limit if limit is not None else DIGEST_LIMITS[kind]
     cells = ensure_matrix(session)
 
-    # Replace any previous undelivered digest of this kind.
+    # Replace undelivered, unjudged items of this kind. Verdict-carrying items are
+    # history — they survive re-assembly (their VerdictLog rows train calibration).
     for old in session.scalars(
         select(DigestItem).where(
-            DigestItem.digest_kind == kind, DigestItem.delivered_at.is_(None)
+            DigestItem.digest_kind == kind,
+            DigestItem.delivered_at.is_(None),
+            DigestItem.verdict.is_(None),
         )
     ).all():
         session.delete(old)
@@ -168,7 +207,15 @@ def assemble_digest(
 
     scored_rows = session.scalars(select(ChangeScore).order_by(ChangeScore.score.desc())).all()
     best_per_change: dict[int, ChangeScore] = {}
+    existing_changes = {
+        row.change_id
+        for row in session.scalars(
+            select(DigestItem).where(DigestItem.digest_kind == kind)
+        ).all()
+    }
     for score_row in scored_rows:
+        if score_row.change_id in existing_changes:
+            continue  # already represented (e.g. a verdicted historical item)
         current = best_per_change.get(score_row.change_id)
         if current is None or score_row.score > current.score:
             best_per_change[score_row.change_id] = score_row
@@ -194,6 +241,10 @@ def assemble_digest(
             dimension_code=dimension,
             reasoning=score_row.reasoning,
         )
+        from pre.verdicts import get_profile_version
+
+        item.profile_version = get_profile_version(session)
+        item.stale = _entity_is_stale(session, score_row.entity_type, score_row.entity_id)
         session.add(item)
         items.append(item)
         if len(items) >= cap:
@@ -243,8 +294,10 @@ def render_digest(session: Session, kind: str) -> str:
         lines.append("  (nothing passed the thresholds)")
     for item in items:
         flag = " [UNSCORED]" if item.unscored else ""
+        stale = " [STALE PROFILE]" if item.stale else ""
         dim = f" ({item.dimension_code})" if item.dimension_code else ""
-        lines.append(f"  {item.score:>3}/100{flag} {item.entity_label}{dim}")
+        verdict = f" -> {item.verdict.upper()}" if item.verdict else ""
+        lines.append(f"  {item.score:>3}/100{flag}{stale}{dim}{verdict} {item.entity_label}")
         change = session.get(Change, item.change_id)
         if change:
             lines.append(f"      [{change.change_type}] {change.product_name}: {change.title}")

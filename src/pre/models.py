@@ -377,9 +377,32 @@ class DigestItem(Base):
     dimension_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
     reasoning: Mapped[str] = mapped_column(String(1024), default="")
     unscored: Mapped[bool] = mapped_column(default=False)  # cold-start urgent notices
+    stale: Mapped[bool] = mapped_column(default=False)  # judged against a stale assertion
+    profile_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     assembled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     verdict: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    verdict_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class VerdictLog(Base):
+    """Immutable audit of every Verdict, tied to the Profile version it trained on.
+
+    Kind and dimension are snapshotted here because DigestItems may be cleaned up;
+    this log is the permanent training signal for the calibration loop.
+    """
+
+    __tablename__ = "verdict_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    digest_item_id: Mapped[int] = mapped_column(ForeignKey("digest_items.id"))
+    change_id: Mapped[int] = mapped_column(ForeignKey("changes.id"))
+    digest_kind: Mapped[str] = mapped_column(String(8))
+    dimension_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    verdict: Mapped[str] = mapped_column(String(8))  # 'act' | 'dismiss'
+    profile_version: Mapped[int] = mapped_column(Integer)
+    channel: Mapped[str] = mapped_column(String(16), default="cli")  # 'cli'|'web'|'push'
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class SystemFlag(Base):

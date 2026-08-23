@@ -18,6 +18,12 @@ dev = [
     "mypy>=1.8",
     "ruff>=0.4",
     "types-PyYAML",
+    "httpx>=0.27",
+    "fastapi>=0.110",
+]
+serve = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
 ]
 
 [project.scripts]

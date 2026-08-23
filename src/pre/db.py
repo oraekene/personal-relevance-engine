@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from pre.models import Base
 
@@ -16,7 +17,14 @@ DEFAULT_DB_URL = "sqlite:///pre.db"
 
 def make_engine(url: str = DEFAULT_DB_URL) -> Engine:
     if url.startswith("sqlite"):
-        return create_engine(url, connect_args={"check_same_thread": False})
+        connect_args = {"check_same_thread": False}
+        # Pure in-memory SQLite must share ONE connection across threads
+        # (the web surface serves requests from a worker thread):
+        if url.rstrip("/").endswith(":memory:") or url == "sqlite://":
+            return create_engine(
+                url, connect_args=connect_args, poolclass=StaticPool
+            )
+        return create_engine(url, connect_args=connect_args)
     return create_engine(url)
 
 

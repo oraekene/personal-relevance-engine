@@ -162,6 +162,9 @@ def accept(session: Session, proposal_id: int, decided_via: str = "manual") -> A
     prop.decided_at = datetime.now(UTC)
     prop.decided_via = decided_via
     session.commit()
+    from pre.verdicts import bump_profile_version
+
+    bump_profile_version(session)
     return applied
 
 
