@@ -11,16 +11,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pre.apply import link_dimension_code, should_write_link
-from pre.models import (
-    Activity,
-    Need,
-    NetworkLink,
-    Organization,
-    Person,
-    ProposedAssertion,
-    Tool,
-)
+from pre.apply import apply_proposal
+from pre.models import ProposedAssertion
 
 # Confidence grows with corroborating observations, capped below certainty.
 _BASE_CONFIDENCE = 0.5
@@ -89,109 +81,15 @@ def list_pending(session: Session) -> list[ProposedAssertion]:
 def accept(session: Session, proposal_id: int, decided_via: str = "manual") -> Any:
     """Apply a pending proposal to the Profile with full provenance.
 
-    Supported entity types: 'tool' (get-or-create), 'person' (Network),
-    'organization' (Network), and 'activity' (requires payload['need_id']
-    pointing at an existing Need).
+    Application lives in pre.apply (applier registry); this keeps lifecycle:
+    fetch, refuse/accept, status, commit, version bump. Supported entity types
+    are whatever the registry holds: tool, person, organization, activity.
     """
     prop = session.get(ProposedAssertion, proposal_id)
     if prop is None or prop.status != "pending":
         return None
 
-    applied: Any = None
-    if prop.entity_type == "tool":
-        name = str(prop.payload_json.get("name", "")).strip()
-        if not name:
-            return None
-        applied = session.scalar(select(Tool).where(Tool.name == name))
-        if applied is None:
-            applied = Tool(name=name)
-            session.add(applied)
-            session.flush()
-        applied.source = f"extraction:{prop.source_tier}"
-        applied.confidence = prop.confidence
-        applied.last_confirmed_at = datetime.now(UTC)
-    elif prop.entity_type == "person":
-        name = str(prop.payload_json.get("name", "")).strip()
-        if not name:
-            return None
-        applied = session.scalar(select(Person).where(Person.display_name == name))
-        if applied is None:
-            applied = Person(display_name=name)
-            session.add(applied)
-            session.flush()
-        applied.source = f"extraction:{prop.source_tier}"
-        applied.confidence = prop.confidence
-        applied.last_confirmed_at = datetime.now(UTC)
-        # Relationship context (ticket 10): accepting a person also writes their
-        # NetworkLink when the proposal carries relationship fields.
-        if should_write_link(prop):
-            existing_link = session.scalar(
-                select(NetworkLink).where(
-                    NetworkLink.person_id == applied.id,
-                    NetworkLink.source == f"extraction:{prop.source_tier}",
-                )
-            )
-            if existing_link is None:
-                session.add(
-                    NetworkLink(
-                        person_id=applied.id,
-                        role=prop.payload_json.get("role"),
-                        frequency=prop.payload_json.get("frequency"),
-                        recency=prop.payload_json.get("recency"),
-                        dimension_code=link_dimension_code(prop),
-                        source=f"extraction:{prop.source_tier}",
-                        confidence=prop.confidence,
-                    )
-                )
-    elif prop.entity_type == "organization":
-        # Mirrors the person branch; C3 will unify both behind an applier registry.
-        name = str(prop.payload_json.get("name", "")).strip()
-        if not name:
-            return None
-        applied = session.scalar(select(Organization).where(Organization.name == name))
-        if applied is None:
-            applied = Organization(name=name)
-            session.add(applied)
-            session.flush()
-        applied.source = f"extraction:{prop.source_tier}"
-        applied.confidence = prop.confidence
-        applied.last_confirmed_at = datetime.now(UTC)
-        if should_write_link(prop):
-            existing_link = session.scalar(
-                select(NetworkLink).where(
-                    NetworkLink.organization_id == applied.id,
-                    NetworkLink.source == f"extraction:{prop.source_tier}",
-                )
-            )
-            if existing_link is None:
-                session.add(
-                    NetworkLink(
-                        organization_id=applied.id,
-                        role=prop.payload_json.get("role"),
-                        frequency=prop.payload_json.get("frequency"),
-                        recency=prop.payload_json.get("recency"),
-                        dimension_code=link_dimension_code(prop),
-                        source=f"extraction:{prop.source_tier}",
-                        confidence=prop.confidence,
-                    )
-                )
-    elif prop.entity_type == "activity":
-        need_id = prop.payload_json.get("need_id")
-        title = str(prop.payload_json.get("title", "")).strip()
-        if not need_id or not title:
-            return None
-        need = session.get(Need, int(need_id))
-        if need is None:
-            return None
-        applied = Activity(
-            need_id=need.id,
-            title=title,
-            cadence=prop.payload_json.get("cadence"),
-        )
-        applied.source = f"extraction:{prop.source_tier}"
-        applied.confidence = prop.confidence
-        session.add(applied)
-        session.flush()
+    applied = apply_proposal(session, prop)
 
     if applied is None:
         return None
