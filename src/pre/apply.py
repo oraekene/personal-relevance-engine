@@ -14,7 +14,15 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pre.models import NetworkLink, Organization, Person, ProposedAssertion, Tool
+from pre.models import (
+    Activity,
+    Need,
+    NetworkLink,
+    Organization,
+    Person,
+    ProposedAssertion,
+    Tool,
+)
 
 Applier = Callable[[Session, ProposedAssertion], Any | None]
 
@@ -138,6 +146,30 @@ def apply_organization(session: Session, prop: ProposedAssertion) -> Any | None:
 
 APPLIERS["person"] = apply_person
 APPLIERS["organization"] = apply_organization
+
+
+def apply_activity(session: Session, prop: ProposedAssertion) -> Any | None:
+    """Create an Activity under its Need; None refuses missing need/title."""
+    need_id = prop.payload_json.get("need_id")
+    title = str(prop.payload_json.get("title", "")).strip()
+    if not need_id or not title:
+        return None
+    need = session.get(Need, int(need_id))
+    if need is None:
+        return None
+    applied = Activity(
+        need_id=need.id,
+        title=title,
+        cadence=prop.payload_json.get("cadence"),
+    )
+    applied.source = f"extraction:{prop.source_tier}"
+    applied.confidence = prop.confidence
+    session.add(applied)
+    session.flush()
+    return applied
+
+
+APPLIERS["activity"] = apply_activity
 
 
 __all__ = ["APPLIERS", "Applier", "apply_proposal", "link_dimension_code", "should_write_link"]
