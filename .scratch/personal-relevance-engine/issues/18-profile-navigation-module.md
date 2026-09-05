@@ -40,4 +40,12 @@ One deep Profile navigation module behind a four-function interface. Land it wit
 - The remaining architecture candidates C2, C4, C5 (beyond the get_mode merge), C6.
 - New domain terms — "Profile" already exists in the glossary; no glossary change needed.
 
-**Status:** ready-for-agent
+**Status:** resolved
+
+## Comments
+
+- Implemented in commit 15f2916 (commits 0–7 as planned, with two reviewed deviations below).
+- `src/pre/profile.py`: `dimension_of` / `label_of` / `text_of` / `is_stale` (+ `get_row`, `iter_texts` supporting seams for judge/retrieval); `ENTITY_MODELS` kept out of `__all__` so the advertised surface stays four functions. Retrieval, judge (fetch only — rich prompt strings byte-identical), digest (incl. get_mode merge into coldstart), and coverage migrated; old walks deleted; duplicate search proves no point-navigation copies remain.
+- Deviation 1 (commit 7): view.py NOT migrated — its full-tree render walk is a rendering traversal, and none of the four functions fit it without N+1 contortion. Different seam, kept deliberately.
+- Deviation 2 (review-caught): first `is_stale` draft resolved Network rows via `get_row` and could flag people/organizations stale where the legacy map always returned False — guarded back to hierarchy-only with a regression test before commit.
+- Verification: 10 tests in tests/test_profile.py; full suite 164 passing, mypy strict, ruff clean.
