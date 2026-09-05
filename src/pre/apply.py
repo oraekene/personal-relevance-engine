@@ -8,11 +8,13 @@ land unwired one type per commit (B-D) and the flip follows in commit E.
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pre.models import ProposedAssertion
+from pre.models import ProposedAssertion, Tool
 
 Applier = Callable[[Session, ProposedAssertion], Any | None]
 
@@ -49,6 +51,25 @@ def apply_proposal(session: Session, prop: ProposedAssertion) -> Any | None:
     if applier is None:
         return None
     return applier(session, prop)
+
+
+def apply_tool(session: Session, prop: ProposedAssertion) -> Any | None:
+    """Get-or-create Tool with extraction provenance; None refuses blank names."""
+    name = str(prop.payload_json.get("name", "")).strip()
+    if not name:
+        return None
+    applied = session.scalar(select(Tool).where(Tool.name == name))
+    if applied is None:
+        applied = Tool(name=name)
+        session.add(applied)
+        session.flush()
+    applied.source = f"extraction:{prop.source_tier}"
+    applied.confidence = prop.confidence
+    applied.last_confirmed_at = datetime.now(UTC)
+    return applied
+
+
+APPLIERS["tool"] = apply_tool
 
 
 __all__ = ["APPLIERS", "Applier", "apply_proposal", "link_dimension_code", "should_write_link"]
