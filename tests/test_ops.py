@@ -151,8 +151,48 @@ def test_backup_restore_roundtrip(tmp_path: Path) -> None:
 
 
 def test_backup_refuses_memory_db(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="file SQLite"):
+    with pytest.raises(ValueError, match="SQLite and Postgres"):
         backup_database("sqlite://", tmp_path / "out.db")
+
+
+class _FakeRunner:
+    """Offline pg_dump/pg_restore stand-in: records argv, fakes the dump file."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def __call__(self, argv: list[str]) -> None:
+        self.calls.append(argv)
+        if argv[0] == "pg_dump":
+            Path(argv[-1]).write_text("fake-dump", encoding="utf-8")
+
+
+def test_backup_postgres_delegates_to_runner(tmp_path: Path) -> None:
+    runner = _FakeRunner()
+    url = "postgresql://user@host:5432/pre"
+    dest = tmp_path / "nightly" / "pre.dump"
+
+    assert backup_database(url, dest, runner=runner) == dest
+    assert dest.is_file()  # fake runner wrote it; parents created beforehand
+    assert runner.calls == [["pg_dump", url, "-F", "c", "-f", str(dest)]]
+
+
+def test_restore_postgres_delegates_to_runner(tmp_path: Path) -> None:
+    runner = _FakeRunner()
+    url = "postgresql://user@host:5432/pre"
+    src = tmp_path / "pre.dump"
+    src.write_text("fake-dump", encoding="utf-8")
+
+    assert restore_database(url, src, runner=runner) == src
+    assert runner.calls == [["pg_restore", "--clean", "--if-exists", "-d", url, str(src)]]
+
+
+def test_restore_postgres_missing_dump_never_runs(tmp_path: Path) -> None:
+    runner = _FakeRunner()
+
+    with pytest.raises(FileNotFoundError, match="backup file not found"):
+        restore_database("postgresql://u@h/db", tmp_path / "absent.dump", runner=runner)
+    assert runner.calls == []
 
 
 def test_retention_prunes_old_but_preserves_verdicts(session: Session) -> None:

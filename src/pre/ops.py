@@ -4,19 +4,22 @@ Proportionality (spec): one Postgres, Python workers, cron/APScheduler. No extra
 infra. Cron owns scheduling; `pre backup`, `pre prune`, and `pre ops` are the cron
 entry points (same pattern as `pre ingest-firehose` in ticket 02).
 
-Backup scope (v1): `pre backup` copies file SQLite DBs (local dev / single-file
-deployments). Postgres deployments use pg_dump from the same cron slot; the
-`LAST BACKUP` stamp below is deployment-agnostic (cron marks it either way).
+Backup scope: `pre backup` copies file SQLite DBs (local dev / single-file
+deployments) and pg_dumps Postgres URLs (the production target per the spec's
+proportionality doctrine) from the same cron slot. The subprocess runner is
+injectable, so tests never shell out (same idea as the judge seam).
 """
 
 from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Protocol
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -112,31 +115,61 @@ def _sqlite_file_for_url(db_url: str) -> Path | None:
     return Path(path_part)
 
 
-def backup_database(db_url: str, dest: Path) -> Path:
-    """Copy the SQLite file DB to dest. Raises on :memory:/non-SQLite (use a file DB)."""
+class CommandRunner(Protocol):
+    """Runs one backup command. Tests substitute a fake that records argv."""
+
+    def __call__(self, argv: list[str]) -> None: ...
+
+
+def _run_command(argv: list[str]) -> None:
+    subprocess.run(argv, check=True)
+
+
+def _is_postgres_url(db_url: str) -> bool:
+    return db_url.startswith(("postgresql://", "postgres://"))
+
+
+def backup_database(
+    db_url: str, dest: Path, runner: CommandRunner | None = None
+) -> Path:
+    """Back up the DB to dest: file copy for SQLite, pg_dump for Postgres."""
+    run = runner or _run_command
     src = _sqlite_file_for_url(db_url)
-    if src is None:
-        raise ValueError(
-            f"backup supports file SQLite DBs only (got {db_url!r}); "
-            "use a file DB, not :memory:"
-        )
-    if not src.is_file():
-        raise FileNotFoundError(f"database file not found: {src}")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dest)
-    return dest
+    if src is not None:
+        if not src.is_file():
+            raise FileNotFoundError(f"database file not found: {src}")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        return dest
+    if _is_postgres_url(db_url):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        run(["pg_dump", db_url, "-F", "c", "-f", str(dest)])
+        return dest
+    raise ValueError(
+        f"backup supports file SQLite and Postgres DBs only (got {db_url!r}); "
+        "use a file DB, not :memory:"
+    )
 
 
-def restore_database(db_url: str, src: Path) -> Path:
-    """Restore the SQLite file DB from a backup copy."""
+def restore_database(
+    db_url: str, src: Path, runner: CommandRunner | None = None
+) -> Path:
+    """Restore the DB from a backup: file copy for SQLite, pg_restore for Postgres.
+
+    Returns the restored target file (SQLite) or the applied dump file (Postgres).
+    """
+    run = runner or _run_command
     if not src.is_file():
         raise FileNotFoundError(f"backup file not found: {src}")
     target = _sqlite_file_for_url(db_url)
-    if target is None:
-        raise ValueError(f"restore supports file SQLite DBs only (got {db_url!r})")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, target)
-    return target
+    if target is not None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, target)
+        return target
+    if _is_postgres_url(db_url):
+        run(["pg_restore", "--clean", "--if-exists", "-d", db_url, str(src)])
+        return src
+    raise ValueError(f"restore supports file SQLite and Postgres DBs only (got {db_url!r})")
 
 
 def mark_backup(session: Session, now: datetime | None = None) -> datetime:
