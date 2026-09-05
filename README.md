@@ -4,8 +4,9 @@ Filters the daily flood of product features, changes, and improvements down to t
 matter to one person's Needs and Activities across 17 Life Dimensions — and learns from
 their Verdicts.
 
-Spec, glossary (`CONTEXT.md`), ADRs, research, and the ticket tracker live one level up in
-this workspace: `.scratch/personal-relevance-engine/` and `docs/`.
+Spec, glossary (`CONTEXT.md`), ADRs, and the ticket tracker live one level up in
+this workspace: `.scratch/personal-relevance-engine/` and `docs/`. Research notes
+live in-repo under `docs/research/`.
 
 ## Stack (per ADR-0002 and the spec)
 

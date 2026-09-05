@@ -2,7 +2,7 @@
 
 17 dimensions derived from OECD Better Life Index, WHOQOL-BREF, SAMHSA Eight Dimensions of
 Wellness, Gallup Five Elements, Bhutan GNH, PERMA, SDT, and Eurostat QoL. Full derivation in
-`.scratch/personal-relevance-engine/research/life-dimension-taxonomies.md` (workspace root).
+`docs/research/life-dimension-taxonomies.md`.
 
 Sub-dimensions are the interview coverage scaffold, not hard schema.
 """
