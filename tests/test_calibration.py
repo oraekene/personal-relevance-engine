@@ -151,7 +151,7 @@ def test_digest_items_flag_stale_matched_entities(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("PRE_STALENESS_DAYS", "30")
-    from pre.digest import staleness_cutoff
+    from pre.profile import staleness_cutoff
 
     change, tool = _seed(session)
     # Force the matched Tool's confirmation into the past:
@@ -174,7 +174,8 @@ def test_fresh_entities_not_flagged_stale(session: Session) -> None:
 
 
 def test_render_shows_stale_label(session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    from pre.digest import render_digest, staleness_cutoff
+    from pre.digest import render_digest
+    from pre.profile import staleness_cutoff
 
     monkeypatch.setenv("PRE_STALENESS_DAYS", "30")
     change, tool = _seed(session)

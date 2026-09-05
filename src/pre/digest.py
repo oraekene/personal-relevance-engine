@@ -11,24 +11,11 @@ at the digest's item limit.
 
 from __future__ import annotations
 
-import os
-from datetime import UTC, datetime, timedelta
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pre.models import (
-    Activity,
-    Change,
-    ChangeScore,
-    DigestItem,
-    Goal,
-    LifeDimension,
-    Need,
-    Task,
-    ThresholdCell,
-    Tool,
-)
+from pre.models import Change, ChangeScore, DigestItem, ThresholdCell
+from pre.profile import dimension_of, is_stale, label_of
 from pre.taxonomy import DIMENSIONS
 
 DIGEST_LIMITS = {"daily": 5, "weekly": 20}
@@ -90,93 +77,6 @@ def render_matrix(session: Session) -> str:
     return "\n".join(lines)
 
 
-def _dimension_for_entity(session: Session, entity_type: str, entity_id: int) -> str | None:
-    """Walk an entity up to its Life Dimension code (Network entities have none yet)."""
-    if entity_type == "goal":
-        row = session.get(Goal, entity_id)
-        dim = session.get(LifeDimension, row.dimension_id) if row else None
-        return dim.code if dim else None
-    if entity_type == "need":
-        need = session.get(Need, entity_id)
-        goal = session.get(Goal, need.goal_id) if need else None
-        dim = session.get(LifeDimension, goal.dimension_id) if goal else None
-        return dim.code if dim else None
-    if entity_type == "activity":
-        from pre.coverage import _dimension_code_for_activity
-
-        return _dimension_code_for_activity(session, entity_id)
-    if entity_type == "task":
-        task = session.get(Task, entity_id)
-        if task is None:
-            return None
-        from pre.coverage import _dimension_code_for_activity
-
-        return _dimension_code_for_activity(session, task.activity_id)
-    if entity_type == "tool":
-        # Walk Tool -> Task -> Activity -> Need -> Goal -> Dimension via its strongest use.
-        from sqlalchemy import select as _select
-
-        from pre.models import TaskTool
-
-        links = session.scalars(
-            _select(TaskTool).where(TaskTool.tool_id == entity_id)
-        ).all()
-        for link in links:
-            code = _dimension_for_entity(session, "task", link.task_id)
-            if code:
-                return code
-        return None
-    return None  # person / organization: no dimension walk yet
-
-
-def _entity_label(session: Session, entity_type: str, entity_id: int) -> str:
-    model = {
-        "goal": Goal,
-        "need": Need,
-        "activity": Activity,
-        "task": Task,
-        "tool": Tool,
-    }.get(entity_type)
-    row = model and session.get(model, entity_id)
-    if row is None:
-        return f"{entity_type}:{entity_id}"
-    label = str(getattr(row, "title", None) or getattr(row, "name", "") or "")
-    return label
-
-
-DEFAULT_STALENESS_DAYS = 90
-
-
-def staleness_cutoff(now: datetime | None = None) -> datetime:
-    raw = os.environ.get("PRE_STALENESS_DAYS", "")
-    try:
-        days = int(raw) if raw else DEFAULT_STALENESS_DAYS
-    except ValueError:
-        days = DEFAULT_STALENESS_DAYS
-    return (now or datetime.now(UTC)) - timedelta(days=days)
-
-
-def _entity_is_stale(session: Session, entity_type: str, entity_id: int) -> bool:
-    """True when the matched assertion hasn't been confirmed within the staleness window."""
-    model = {
-        "goal": Goal,
-        "need": Need,
-        "activity": Activity,
-        "task": Task,
-        "tool": Tool,
-    }.get(entity_type)
-    row = model and session.get(model, entity_id)
-    if row is None:
-        return False
-    confirmed: datetime | None = getattr(row, "last_confirmed_at", None)
-    if confirmed is None:
-        return False
-    if confirmed.tzinfo is None:
-        confirmed = confirmed.replace(tzinfo=UTC)  # SQLite returns naive datetimes
-    is_stale: bool = confirmed < staleness_cutoff()
-    return is_stale
-
-
 def assemble_digest(
     session: Session,
     kind: str,
@@ -224,7 +124,7 @@ def assemble_digest(
     for change_id, score_row in sorted(
         best_per_change.items(), key=lambda kv: kv[1].score, reverse=True
     ):
-        dimension = _dimension_for_entity(session, score_row.entity_type, score_row.entity_id)
+        dimension = dimension_of(session, score_row.entity_type, score_row.entity_id)
         cell_key = (kind, dimension) if dimension else (kind, "__network__")
         cell = cells.get(cell_key)
         min_score = cell.min_score if cell else DEFAULT_MIN_SCORES[kind]
@@ -237,14 +137,14 @@ def assemble_digest(
             score=score_row.score,
             entity_type=score_row.entity_type,
             entity_id=score_row.entity_id,
-            entity_label=_entity_label(session, score_row.entity_type, score_row.entity_id),
+            entity_label=label_of(session, score_row.entity_type, score_row.entity_id),
             dimension_code=dimension,
             reasoning=score_row.reasoning,
         )
         from pre.verdicts import get_profile_version
 
         item.profile_version = get_profile_version(session)
-        item.stale = _entity_is_stale(session, score_row.entity_type, score_row.entity_id)
+        item.stale = is_stale(session, score_row.entity_type, score_row.entity_id)
         session.add(item)
         items.append(item)
         if len(items) >= cap:
@@ -282,6 +182,7 @@ def surface_unscored_urgent(session: Session, kind: str = "daily") -> int:
 
 
 def render_digest(session: Session, kind: str) -> str:
+    from pre.coldstart import get_mode
     from pre.models import utcnow
 
     mode = get_mode(session)
@@ -306,19 +207,11 @@ def render_digest(session: Session, kind: str) -> str:
     return "\n".join(lines)
 
 
-def get_mode(session: Session) -> str:
-    from pre.models import SystemFlag
-
-    flag = session.scalar(select(SystemFlag).where(SystemFlag.key == "mode"))
-    return flag.value if flag else "shadow"
-
-
 __all__ = [
     "DEFAULT_MIN_SCORES",
     "DIGEST_LIMITS",
     "assemble_digest",
     "ensure_matrix",
-    "get_mode",
     "render_digest",
     "render_matrix",
     "set_cell",

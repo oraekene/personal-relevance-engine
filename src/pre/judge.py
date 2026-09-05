@@ -22,16 +22,8 @@ from pre.cost_meter import (
     estimate_cost_cents,
     log_call,
 )
-from pre.models import (
-    Activity,
-    Change,
-    Goal,
-    Need,
-    Organization,
-    Person,
-    Task,
-    Tool,
-)
+from pre.models import Change
+from pre.profile import get_row
 from pre.retrieval import ShortlistCandidate
 
 
@@ -55,38 +47,24 @@ class Judge(Protocol):
 def _entity_context(session: Session, candidate: ShortlistCandidate) -> str:
     """Full Profile context for one candidate entity (decision 8: rich context)."""
     kind, eid = candidate.entity_type, candidate.entity_id
-    row: Any
-    if kind == "goal":
-        row = session.get(Goal, eid)
-        if row:
-            return f"Goal: {row.title} (horizon: {row.horizon or 'unspecified'})"
-    elif kind == "need":
-        row = session.get(Need, eid)
-        if row:
-            return (
-                f"Need: {row.title} (horizon: {row.horizon or '?'}, "
-                f"pain: {row.pain_level}/10, openness: {row.openness_to_change or '?'})"
-            )
-    elif kind == "activity":
-        row = session.get(Activity, eid)
-        if row:
-            return f"Activity: {row.title} (cadence: {row.cadence or '?'})"
-    elif kind == "task":
-        row = session.get(Task, eid)
-        if row:
-            return f"Task: {row.title}"
-    elif kind == "tool":
-        row = session.get(Tool, eid)
-        if row:
-            return f"Tool the user relies on: {row.name}"
-    elif kind == "person":
-        row = session.get(Person, eid)
-        if row:
-            return f"Person in the user's network: {row.display_name}"
-    elif kind == "organization":
-        row = session.get(Organization, eid)
-        if row:
-            return f"Organization in the user's network: {row.name}"
+    row: Any = get_row(session, kind, eid)
+    if kind == "goal" and row:
+        return f"Goal: {row.title} (horizon: {row.horizon or 'unspecified'})"
+    if kind == "need" and row:
+        return (
+            f"Need: {row.title} (horizon: {row.horizon or '?'}, "
+            f"pain: {row.pain_level}/10, openness: {row.openness_to_change or '?'})"
+        )
+    if kind == "activity" and row:
+        return f"Activity: {row.title} (cadence: {row.cadence or '?'})"
+    if kind == "task" and row:
+        return f"Task: {row.title}"
+    if kind == "tool" and row:
+        return f"Tool the user relies on: {row.name}"
+    if kind == "person" and row:
+        return f"Person in the user's network: {row.display_name}"
+    if kind == "organization" and row:
+        return f"Organization in the user's network: {row.name}"
     return f"{kind}:{eid}"
 
 

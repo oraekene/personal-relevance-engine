@@ -13,17 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pre.embeddings import HashingEmbedder, content_hash, cosine
-from pre.models import (
-    Activity,
-    Change,
-    EntityEmbedding,
-    Goal,
-    Need,
-    Organization,
-    Person,
-    Task,
-    Tool,
-)
+from pre.models import Change, EntityEmbedding
+from pre.profile import iter_texts
 
 Embedder = HashingEmbedder
 
@@ -45,24 +36,7 @@ class ShortlistCandidate:
 
 def _entity_text(session: Session) -> list[IndexedEntity]:
     """Collect the embeddable text for every Profile and Network entity."""
-    entities: list[IndexedEntity] = []
-    for goal in session.scalars(select(Goal)).all():
-        entities.append(IndexedEntity("goal", goal.id, goal.title))
-    for need in session.scalars(select(Need)).all():
-        entities.append(IndexedEntity("need", need.id, need.title))
-    for activity in session.scalars(select(Activity)).all():
-        entities.append(
-            IndexedEntity("activity", activity.id, f"{activity.title} {activity.cadence or ''}")
-        )
-    for task in session.scalars(select(Task)).all():
-        entities.append(IndexedEntity("task", task.id, task.title))
-    for tool in session.scalars(select(Tool)).all():
-        entities.append(IndexedEntity("tool", tool.id, tool.name))
-    for person in session.scalars(select(Person)).all():
-        entities.append(IndexedEntity("person", person.id, person.display_name))
-    for org in session.scalars(select(Organization)).all():
-        entities.append(IndexedEntity("organization", org.id, org.name))
-    return entities
+    return [IndexedEntity(t, i, tx) for (t, i, tx) in iter_texts(session)]
 
 
 def index_all(session: Session, embedder: Embedder | None = None) -> dict[str, int]:

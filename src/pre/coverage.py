@@ -15,6 +15,7 @@ from pre.models import (
     ProposedAssertion,
     Task,
 )
+from pre.profile import dimension_of
 from pre.taxonomy import DIMENSIONS
 
 
@@ -27,23 +28,6 @@ class DimensionCoverage:
     activities: int = 0
     tasks: int = 0
     tiers: set[str] = field(default_factory=set)
-
-
-def _dimension_code_for_activity(session: Session, activity_id: int) -> str | None:
-    """Walk Activity -> Need -> Goal -> Life Dimension."""
-    from pre.models import LifeDimension
-
-    activity = session.get(Activity, activity_id)
-    if activity is None:
-        return None
-    need = session.get(Need, activity.need_id)
-    if need is None:
-        return None
-    goal = session.get(Goal, need.goal_id)
-    if goal is None:
-        return None
-    dim = session.get(LifeDimension, goal.dimension_id)
-    return dim.code if dim else None
 
 
 def coverage_report(session: Session) -> list[DimensionCoverage]:
@@ -70,13 +54,11 @@ def coverage_report(session: Session) -> list[DimensionCoverage]:
         if code in report:
             report[code].needs += 1
     for activity in session.scalars(select(Activity)).all():
-        code = _dimension_code_for_activity(session, activity.id)
+        code = dimension_of(session, "activity", activity.id)
         if code in report:
             report[code].activities += 1
     for task in session.scalars(select(Task)).all():
-        code = (
-            _dimension_code_for_activity(session, task.activity_id) if task.activity_id else None
-        )
+        code = dimension_of(session, "task", task.activity_id) if task.activity_id else None
         if code in report:
             report[code].tasks += 1
 
