@@ -204,6 +204,10 @@ def prune_old_changes(session: Session, now: datetime | None = None) -> int:
     Verdict-carrying Changes are preserved (VerdictLog is the permanent training
     signal for calibration). Dependent scores and ephemeral digest items for pruned
     Changes go with them; LLM cost history is kept as audit.
+
+    Maintainer decision (issue 17, option a): verdict history is kept
+    indefinitely — unbounded slow growth is accepted over forgetting learned
+    tuning. Revisit only if the database grows noticeably.
     """
     moment = now or datetime.now(UTC)
     cutoff = _as_naive(moment) - timedelta(days=retention_days())
