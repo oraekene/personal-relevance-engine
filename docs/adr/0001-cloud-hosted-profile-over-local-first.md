@@ -1,0 +1,3 @@
+# Cloud-hosted Profile over local-first storage
+
+The Personal Relevance Engine's Profile — the joined dataset of one person's financial, health, location, comms, device, and work-system data — is stored fully cloud-hosted with no minimization tiers, rather than local-first and encrypted. Initially decided local-first; reversed when the user prioritized (a) digest access and verdict capture from any device and (b) maximum LLM-judge quality via full, unminimized Profile context. Accepted consequence: the complete joined Profile rests with third parties under their default protections. Reopening this decision later means migrating the corpus and re-establishing the digest surface, so it is expensive to reverse.

@@ -4,9 +4,10 @@ Filters the daily flood of product features, changes, and improvements down to t
 matter to one person's Needs and Activities across 17 Life Dimensions — and learns from
 their Verdicts.
 
-Spec, glossary (`CONTEXT.md`), ADRs, and the ticket tracker live one level up in
-this workspace: `.scratch/personal-relevance-engine/` and `docs/`. Research notes
-live in-repo under `docs/research/`.
+Spec (`.scratch/personal-relevance-engine/spec.md`), glossary (`CONTEXT.md`),
+ADRs (`docs/adr/`), research (`docs/research/`), and the ticket tracker
+(`.scratch/personal-relevance-engine/issues/`) all live in this repo. Shared
+agent-skill plumbing (`AGENTS.md`, `docs/agents/`) stays at the workspace root.
 
 ## Stack (per ADR-0002 and the spec)
 

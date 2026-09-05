@@ -1,0 +1,3 @@
+# Staged-funnel matching over LLM-judge-everything
+
+Changes are matched to the Profile through a staged funnel: (1) parse each Change into a structured record, (2) embedding retrieval shortlists candidate Profile entities, (3) an LLM judge scores only the shortlist with full Goal/Need/Activity context and reasons, (4) Verdicts recalibrate thresholds. Rejected alternatives: pure embedding similarity (too blunt to reason about context like seat counts or Workflow position), LLM-judge-everything (cost and latency at firehose scale), and rules-only matching (brittle to phrasing). This mirrors the proportionality and calibration doctrines already used in the user's radar system.
