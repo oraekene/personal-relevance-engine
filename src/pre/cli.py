@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -26,6 +27,15 @@ from pre.intake import apply_intake_file
 from pre.judge import JudgeVerdict, LLMJudge
 from pre.live import import_live_file
 from pre.models import Change
+from pre.ops import (
+    backup_database,
+    mark_backup,
+    prune_old_changes,
+    record_provider_result,
+    render_ops_dashboard,
+    restore_database,
+    retention_days,
+)
 from pre.queue import accept, reject, render_pending
 from pre.retrieval import index_all, render_shortlist, shortlist_for_change
 from pre.scoring import judge_change, render_scores
@@ -159,6 +169,30 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8787)
+
+    ops_cmd = sub.add_parser(
+        "ops", help="Ops dashboard: spend per period, provider, retention, backups"
+    )
+    add_db(ops_cmd)
+
+    backup_cmd = sub.add_parser(
+        "backup", help="Nightly backup entry point: copy the SQLite DB file"
+    )
+    add_db(backup_cmd)
+    backup_cmd.add_argument("--file", required=True, help="Backup destination path")
+
+    restore_cmd = sub.add_parser("restore", help="Restore the DB file from a backup")
+    add_db(restore_cmd)
+    restore_cmd.add_argument("--file", required=True, help="Backup source path")
+
+    prune_cmd = sub.add_parser("prune", help="Enforce the corpus retention policy")
+    add_db(prune_cmd)
+
+    provider_cmd = sub.add_parser(
+        "provider", help="Record a provider probe result (health monitor)"
+    )
+    add_db(provider_cmd)
+    provider_cmd.add_argument("--result", required=True, choices=["ok", "fail"])
     return parser
 
 
@@ -581,6 +615,71 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ops(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        print(render_ops_dashboard(session))
+        return 0
+    finally:
+        session.close()
+
+
+def _cmd_backup(args: argparse.Namespace) -> int:
+    # Copy first, stamp after: a failed copy must not record a backup,
+    # and the copy must not race an open session handle on the same file.
+    try:
+        dest = backup_database(args.db, Path(args.file))
+    except (OSError, ValueError) as exc:
+        print(f"backup failed: {exc}", file=sys.stderr)
+        return 1
+    session = _open_session(args.db)
+    try:
+        mark_backup(session)
+    finally:
+        session.close()
+    print(f"Backup written to {dest}")
+    return 0
+
+
+def _cmd_restore(args: argparse.Namespace) -> int:
+    try:
+        target = restore_database(args.db, Path(args.file))
+        print(f"Restored {args.db} from {args.file} (file: {target})")
+        return 0
+    except (OSError, ValueError) as exc:
+        print(f"restore failed: {exc}", file=sys.stderr)
+        return 1
+
+
+def _cmd_prune(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        count = prune_old_changes(session)
+        print(
+            f"Pruned {count} Changes older than {retention_days()}d "
+            "(verdict-carrying Changes preserved)."
+        )
+        return 0
+    finally:
+        session.close()
+
+
+def _cmd_provider(args: argparse.Namespace) -> int:
+    session = _open_session(args.db)
+    try:
+        status = record_provider_result(session, ok=(args.result == "ok"))
+        print(
+            f"Provider health: {status.consecutive_failures} consecutive "
+            "failures (threshold 3)."
+        )
+        if status.should_page:
+            print("!! PAGING — provider failed 3+ times in a row", file=sys.stderr)
+            return 2
+        return 0
+    finally:
+        session.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     handlers = {
@@ -610,6 +709,11 @@ def main(argv: list[str] | None = None) -> int:
         "verdict": _cmd_verdict,
         "verdicts": _cmd_verdicts,
         "serve": _cmd_serve,
+        "ops": _cmd_ops,
+        "backup": _cmd_backup,
+        "restore": _cmd_restore,
+        "prune": _cmd_prune,
+        "provider": _cmd_provider,
     }
     return handlers[args.command](args)
 
