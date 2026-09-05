@@ -14,7 +14,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pre.models import ProposedAssertion, Tool
+from pre.models import NetworkLink, Organization, Person, ProposedAssertion, Tool
 
 Applier = Callable[[Session, ProposedAssertion], Any | None]
 
@@ -70,6 +70,74 @@ def apply_tool(session: Session, prop: ProposedAssertion) -> Any | None:
 
 
 APPLIERS["tool"] = apply_tool
+
+
+def _write_network_link(
+    session: Session,
+    prop: ProposedAssertion,
+    person_id: int | None = None,
+    organization_id: int | None = None,
+) -> None:
+    """Idempotent per (entity, evidence tier) NetworkLink write."""
+    if (person_id is None) == (organization_id is None):
+        raise ValueError("exactly one of person_id/organization_id is required")
+    if not should_write_link(prop):
+        return
+    source = f"extraction:{prop.source_tier}"
+    matches = (
+        NetworkLink.person_id == person_id
+        if person_id is not None
+        else NetworkLink.organization_id == organization_id
+    )
+    existing = session.scalar(select(NetworkLink).where(matches, NetworkLink.source == source))
+    if existing is not None:
+        return
+    link = NetworkLink(person_id=person_id, organization_id=organization_id)
+    link.role = prop.payload_json.get("role")
+    link.frequency = prop.payload_json.get("frequency")
+    link.recency = prop.payload_json.get("recency")
+    link.dimension_code = link_dimension_code(prop)
+    link.source = source
+    link.confidence = prop.confidence
+    session.add(link)
+
+
+def apply_person(session: Session, prop: ProposedAssertion) -> Any | None:
+    """Get-or-create Person plus per-tier NetworkLink; None refuses blank names."""
+    name = str(prop.payload_json.get("name", "")).strip()
+    if not name:
+        return None
+    applied = session.scalar(select(Person).where(Person.display_name == name))
+    if applied is None:
+        applied = Person(display_name=name)
+        session.add(applied)
+        session.flush()
+    applied.source = f"extraction:{prop.source_tier}"
+    applied.confidence = prop.confidence
+    applied.last_confirmed_at = datetime.now(UTC)
+    _write_network_link(session, prop, person_id=applied.id)
+    return applied
+
+
+def apply_organization(session: Session, prop: ProposedAssertion) -> Any | None:
+    """Get-or-create Organization plus per-tier NetworkLink; None refuses blank names."""
+    name = str(prop.payload_json.get("name", "")).strip()
+    if not name:
+        return None
+    applied = session.scalar(select(Organization).where(Organization.name == name))
+    if applied is None:
+        applied = Organization(name=name)
+        session.add(applied)
+        session.flush()
+    applied.source = f"extraction:{prop.source_tier}"
+    applied.confidence = prop.confidence
+    applied.last_confirmed_at = datetime.now(UTC)
+    _write_network_link(session, prop, organization_id=applied.id)
+    return applied
+
+
+APPLIERS["person"] = apply_person
+APPLIERS["organization"] = apply_organization
 
 
 __all__ = ["APPLIERS", "Applier", "apply_proposal", "link_dimension_code", "should_write_link"]
