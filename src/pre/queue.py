@@ -11,7 +11,15 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pre.models import Activity, Need, NetworkLink, Person, ProposedAssertion, Tool
+from pre.models import (
+    Activity,
+    Need,
+    NetworkLink,
+    Organization,
+    Person,
+    ProposedAssertion,
+    Tool,
+)
 
 # Confidence grows with corroborating observations, capped below certainty.
 _BASE_CONFIDENCE = 0.5
@@ -77,11 +85,37 @@ def list_pending(session: Session) -> list[ProposedAssertion]:
     )
 
 
+_LINK_CONTEXT_KEYS = ("frequency", "recency", "role", "dimension_code")
+_LINK_TIERS = ("comms", "social", "contacts", "live-email")
+
+
+def _should_write_link(prop: ProposedAssertion) -> bool:
+    """A NetworkLink is evidence: relationship context, a Network tier, or a hint."""
+    return (
+        any(prop.payload_json.get(key) for key in _LINK_CONTEXT_KEYS)
+        or prop.source_tier in _LINK_TIERS
+        or prop.dimension_code is not None
+    )
+
+
+def _link_dimension_code(prop: ProposedAssertion) -> str | None:
+    """One source for link dimensions: the proposal column wins, payload is fallback.
+
+    Extraction hints ride the column, relationship context rides the payload;
+    readers (links, coverage) must agree, so the merge lives here.
+    """
+    if prop.dimension_code is not None:
+        return prop.dimension_code
+    value = prop.payload_json.get("dimension_code")
+    return str(value) if value is not None else None
+
+
 def accept(session: Session, proposal_id: int, decided_via: str = "manual") -> Any:
     """Apply a pending proposal to the Profile with full provenance.
 
-    Supported entity types: 'tool' (get-or-create), 'person' (Network), and 'activity'
-    (requires payload['need_id'] pointing at an existing Need).
+    Supported entity types: 'tool' (get-or-create), 'person' (Network),
+    'organization' (Network), and 'activity' (requires payload['need_id']
+    pointing at an existing Need).
     """
     prop = session.get(ProposedAssertion, proposal_id)
     if prop is None or prop.status != "pending":
@@ -114,12 +148,7 @@ def accept(session: Session, proposal_id: int, decided_via: str = "manual") -> A
         applied.last_confirmed_at = datetime.now(UTC)
         # Relationship context (ticket 10): accepting a person also writes their
         # NetworkLink when the proposal carries relationship fields.
-        has_link_context = any(
-            prop.payload_json.get(key)
-            for key in ("frequency", "recency", "role", "dimension_code")
-        )
-        link_tiers = ("comms", "social", "contacts", "live-email")
-        if has_link_context or prop.source_tier in link_tiers:
+        if _should_write_link(prop):
             existing_link = session.scalar(
                 select(NetworkLink).where(
                     NetworkLink.person_id == applied.id,
@@ -133,7 +162,39 @@ def accept(session: Session, proposal_id: int, decided_via: str = "manual") -> A
                         role=prop.payload_json.get("role"),
                         frequency=prop.payload_json.get("frequency"),
                         recency=prop.payload_json.get("recency"),
-                        dimension_code=prop.payload_json.get("dimension_code"),
+                        dimension_code=_link_dimension_code(prop),
+                        source=f"extraction:{prop.source_tier}",
+                        confidence=prop.confidence,
+                    )
+                )
+    elif prop.entity_type == "organization":
+        # Mirrors the person branch; C3 will unify both behind an applier registry.
+        name = str(prop.payload_json.get("name", "")).strip()
+        if not name:
+            return None
+        applied = session.scalar(select(Organization).where(Organization.name == name))
+        if applied is None:
+            applied = Organization(name=name)
+            session.add(applied)
+            session.flush()
+        applied.source = f"extraction:{prop.source_tier}"
+        applied.confidence = prop.confidence
+        applied.last_confirmed_at = datetime.now(UTC)
+        if _should_write_link(prop):
+            existing_link = session.scalar(
+                select(NetworkLink).where(
+                    NetworkLink.organization_id == applied.id,
+                    NetworkLink.source == f"extraction:{prop.source_tier}",
+                )
+            )
+            if existing_link is None:
+                session.add(
+                    NetworkLink(
+                        organization_id=applied.id,
+                        role=prop.payload_json.get("role"),
+                        frequency=prop.payload_json.get("frequency"),
+                        recency=prop.payload_json.get("recency"),
+                        dimension_code=_link_dimension_code(prop),
                         source=f"extraction:{prop.source_tier}",
                         confidence=prop.confidence,
                     )

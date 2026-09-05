@@ -62,6 +62,7 @@ def enrich_person_proposal(
         source_tier=proposal.source_tier,
         source_ref=proposal.source_ref,
         confidence=proposal.confidence,
+        dimension_code=dimension_code if dimension_code else proposal.dimension_code,
     )
 
 

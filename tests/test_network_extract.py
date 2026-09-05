@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pre.intake import apply_intake_dict
-from pre.models import NetworkLink, Person
+from pre.models import NetworkLink, Organization, Person
 from pre.network_extract import (
     enrich_person_proposal,
     frequency_bucket,
@@ -200,3 +200,80 @@ def test_network_entities_embeddable_after_index(session: Session) -> None:
     assert any(c.entity_type == "person" for c in candidates), (
         "accepted Network people should be retrievable against Changes"
     )
+
+
+# --- accepting an organization writes Organization + NetworkLink (issue 16) -------
+
+
+def test_accepting_organization_writes_org_and_link(
+    session: Session, tmp_path: Path
+) -> None:
+    doc = tmp_path / "contacts.json"
+    doc.write_text('[{"name": "Ada Quinn", "organization": "Quinn Labs"}]', encoding="utf-8")
+    result = import_tranche2_file(session, "contacts", doc)
+    assert result["proposals_new"] == 2
+
+    org_prop = next(p for p in list_pending(session) if p.entity_type == "organization")
+    org = accept(session, org_prop.id)
+
+    assert isinstance(org, Organization)
+    assert org.name == "Quinn Labs"
+    assert org.source == "extraction:contacts"
+    link = session.scalars(select(NetworkLink)).one()
+    assert link.organization_id == org.id
+    assert link.person_id is None
+    assert link.source == "extraction:contacts"
+
+
+def test_link_dimension_prefers_proposal_column(session: Session) -> None:
+    prop = propose(
+        session,
+        Proposal(
+            entity_type="person",
+            payload_key="person:x",
+            payload={"name": "X", "dimension_code": "social"},
+            source_tier="comms",
+            source_ref="c.json",
+            dimension_code="career",
+        ),
+    )
+    accept(session, prop.id)
+
+    link = session.scalars(select(NetworkLink)).one()
+    assert link.dimension_code == "career"
+
+
+def test_bare_column_hint_still_mints_a_link(session: Session) -> None:
+    """A top-level-only dimension hint from a non-Network tier is still evidence."""
+    prop = propose(
+        session,
+        Proposal(
+            entity_type="person",
+            payload_key="person:y",
+            payload={"name": "Y"},
+            source_tier="health",
+            source_ref="h.json",
+            dimension_code="physical_health",
+        ),
+    )
+    accept(session, prop.id)
+
+    link = session.scalars(select(NetworkLink)).one()
+    assert link.dimension_code == "physical_health"
+    assert link.source == "extraction:health"
+
+
+def test_enrich_propagates_dimension_to_proposal_column() -> None:
+    base = Proposal(
+        entity_type="person",
+        payload_key="person:x",
+        payload={"name": "X"},
+        source_tier="comms",
+        source_ref="f.json",
+    )
+    enriched = enrich_person_proposal(
+        base, occurrences=1, last_seen=None, dimension_code="career"
+    )
+
+    assert enriched.dimension_code == "career"
+    assert enriched.payload["dimension_code"] == "career"
