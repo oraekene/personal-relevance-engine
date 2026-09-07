@@ -17,6 +17,13 @@ from sqlalchemy.orm import Session
 from pre.models import SourceSyncState, Tool
 from pre.parsers import parse_commerce_csv, parse_financial_csv, parse_takeout_activity
 from pre.queue import Proposal, propose
+from pre.tranche2 import (
+    parse_comms_json,
+    parse_contacts_json,
+    parse_notes_json,
+    parse_social_json,
+)
+from pre.tranche3 import parse_device_history, parse_health_export, parse_work_systems
 
 ParserFn = Callable[[Path], list[Proposal]]
 
@@ -92,6 +99,13 @@ IMPORTERS: dict[str, BaseImporter] = {
     "financial": BaseImporter("financial", parse_financial_csv),
     "commerce": BaseImporter("commerce", parse_commerce_csv),
     "takeout": BaseImporter("takeout", parse_takeout_activity),
+    "comms": BaseImporter("comms", parse_comms_json),
+    "notes": BaseImporter("notes", parse_notes_json),
+    "social": BaseImporter("social", parse_social_json),
+    "contacts": BaseImporter("contacts", parse_contacts_json),
+    "device": BaseImporter("device", parse_device_history),
+    "health": BaseImporter("health", parse_health_export),
+    "work-systems": BaseImporter("work-systems", parse_work_systems),
 }
 
 

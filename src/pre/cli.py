@@ -40,8 +40,6 @@ from pre.queue import accept, reject, render_pending
 from pre.retrieval import index_all, render_shortlist, shortlist_for_change
 from pre.scoring import judge_change, render_scores
 from pre.taxonomy import DIMENSIONS, validate
-from pre.tranche2 import import_tranche2_file
-from pre.tranche3 import import_tranche3_file
 from pre.verdicts import record_verdict, render_verdict_summary
 from pre.view import render_profile
 from pre.watchlist import active_watchlist_product_names, sync_watchlist
@@ -380,12 +378,8 @@ def _cmd_shortlist(args: argparse.Namespace) -> int:
 def _cmd_import2(args: argparse.Namespace) -> int:
     session = _open_session(args.db)
     try:
-        result = import_tranche2_file(session, args.kind, args.file)
-        print(
-            f"Imported {args.kind}:{args.file} — {result['proposals_new']} new proposals, "
-            f"{result['strengthened']} strengthened, "
-            f"{result['skipped_already_in_profile']} skipped (already in Profile)."
-        )
+        result = import_file(session, args.kind, args.file)
+        _print_import_result(args.kind, args.file, result)
         return 0
     except Exception as exc:  # noqa: BLE001 -- CLI boundary; print any failure readably
         print(f"import2 failed: {exc}", file=sys.stderr)
@@ -414,11 +408,8 @@ def _cmd_import_live(args: argparse.Namespace) -> int:
 def _cmd_import3(args: argparse.Namespace) -> int:
     session = _open_session(args.db)
     try:
-        result = import_tranche3_file(session, args.kind, args.file)
-        print(
-            f"Imported {args.kind}:{args.file} — {result['proposals_new']} new proposals, "
-            f"{result['strengthened']} strengthened."
-        )
+        result = import_file(session, args.kind, args.file)
+        _print_import_result(args.kind, args.file, result)
         return 0
     except Exception as exc:  # noqa: BLE001 -- CLI boundary; print any failure readably
         print(f"import3 failed: {exc}", file=sys.stderr)

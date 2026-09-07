@@ -25,12 +25,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from pre.models import SourceSyncState, Tool
 from pre.network_extract import enrich_person_proposal
-from pre.queue import Proposal, propose
+from pre.queue import Proposal
 
 _EMAIL_NAME = re.compile(r"^(.*?)\s*<")
 _PLACEHOLDER_NAMES = {"me", "my", "self", "you"}
@@ -181,58 +177,3 @@ def parse_contacts_json(path: str | Path) -> list[Proposal]:
     from pre.network_extract import parse_contacts_json as _parse
 
     return _parse(path)
-
-
-PARSERS = {
-    "comms": parse_comms_json,
-    "notes": parse_notes_json,
-    "social": parse_social_json,
-    "contacts": parse_contacts_json,
-}
-
-
-def _filter_known_tools(session: Session, proposals: list[Proposal]) -> list[Proposal]:
-    """Spec criterion: proposals deduplicate against assertions already in the Profile."""
-    existing = {name.lower() for name in session.scalars(select(Tool.name)).all()}
-    return [p for p in proposals if p.payload_key not in {f"tool:{n}" for n in existing}]
-
-
-def import_tranche2_file(session: Session, kind: str, path: str | Path) -> dict[str, int]:
-    """Full history on first connect, deltas after — same mechanics as tranche 1."""
-    if kind not in PARSERS:
-        raise ValueError(f"unknown kind {kind!r}; expected one of {sorted(PARSERS)}")
-    source_ref = str(path)
-
-    state = (
-        session.query(SourceSyncState).filter_by(tier=kind, source_ref=source_ref).one_or_none()
-    )
-    if state is None:
-        state = SourceSyncState(tier=kind, source_ref=source_ref)
-        session.add(state)
-        session.flush()
-
-    proposals = PARSERS[kind](Path(path))
-    before = len(proposals)
-    proposals = _filter_known_tools(session, proposals)
-    skipped_known = before - len(proposals)
-
-    new_count = 0
-    strengthened = 0
-    for proposal in proposals:
-        confidence_before = proposal.confidence
-        row = propose(session, proposal)
-        if row.observations == 1 and row.status == "pending":
-            new_count += 1
-        elif row.confidence > confidence_before or row.observations > 1:
-            strengthened += 1
-
-    from pre.models import utcnow
-
-    state.records_seen += before
-    state.last_sync_at = utcnow()
-    session.commit()
-    return {
-        "proposals_new": new_count,
-        "strengthened": strengthened,
-        "skipped_already_in_profile": skipped_known,
-    }

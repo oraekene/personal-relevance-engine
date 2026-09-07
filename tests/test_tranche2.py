@@ -6,9 +6,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from pre.ingest import import_file
 from pre.models import Person, SourceSyncState, Tool
 from pre.queue import list_pending
-from pre.tranche2 import import_tranche2_file, parse_comms_json, parse_notes_json, parse_social_json
+from pre.tranche2 import parse_comms_json, parse_notes_json, parse_social_json
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -45,20 +46,20 @@ def test_social_parser_proposes_platform_and_people() -> None:
 
 
 def test_tranche2_import_routes_through_queue(session: Session) -> None:
-    result = import_tranche2_file(session, "notes", FIXTURES / "notes.json")
+    result = import_file(session, "notes", FIXTURES / "notes.json")
 
-    assert result["proposals_new"] >= 2
+    assert result.proposals_new >= 2
     assert session.query(Tool).count() == 0  # queue never writes the Profile directly
-    assert len(list_pending(session)) == result["proposals_new"]
+    assert len(list_pending(session)) == result.proposals_new
 
 
 def test_tranche2_dedupes_against_tools_already_in_profile(session: Session) -> None:
     session.add(Tool(name="Obsidian"))
     session.commit()
 
-    result = import_tranche2_file(session, "notes", FIXTURES / "notes.json")
+    result = import_file(session, "notes", FIXTURES / "notes.json")
 
-    assert result["skipped_already_in_profile"] == 1
+    assert result.skipped_known == 1
     pending_names = {
         p.payload_json.get("name")
         for p in list_pending(session)
@@ -68,11 +69,11 @@ def test_tranche2_dedupes_against_tools_already_in_profile(session: Session) -> 
 
 
 def test_tranche2_full_history_then_delta(session: Session) -> None:
-    first = import_tranche2_file(session, "social", FIXTURES / "social.json")
-    second = import_tranche2_file(session, "social", FIXTURES / "social.json")
+    first = import_file(session, "social", FIXTURES / "social.json")
+    second = import_file(session, "social", FIXTURES / "social.json")
 
-    assert first["proposals_new"] >= 2
-    assert second["proposals_new"] == 0
+    assert first.proposals_new >= 2
+    assert second.proposals_new == 0
     state = session.scalars(select(SourceSyncState)).one()
     assert state.tier == "social"
     # records_seen accumulates across runs (2 proposals per run on this fixture):
@@ -81,11 +82,11 @@ def test_tranche2_full_history_then_delta(session: Session) -> None:
 
 def test_unknown_kind_rejected(session: Session) -> None:
     with pytest.raises(ValueError, match="unknown kind"):
-        import_tranche2_file(session, "browser-history", FIXTURES / "notes.json")
+        import_file(session, "browser-history", FIXTURES / "notes.json")
 
 
 def test_person_proposals_are_network_cluster(session: Session) -> None:
-    import_tranche2_file(session, "comms", FIXTURES / "email.json")
+    import_file(session, "comms", FIXTURES / "email.json")
 
     people_proposals = [
         p for p in list_pending(session) if p.entity_type == "person"

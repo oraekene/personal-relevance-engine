@@ -6,6 +6,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from pre.ingest import import_file
 from pre.intake import apply_intake_dict
 from pre.models import NetworkLink, Organization, Person
 from pre.network_extract import (
@@ -16,7 +17,6 @@ from pre.network_extract import (
 )
 from pre.queue import Proposal, accept, list_pending, propose
 from pre.retrieval import index_all
-from pre.tranche2 import import_tranche2_file
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -85,9 +85,9 @@ def test_contacts_kind_imports_through_queue(session: Session, tmp_path: Path) -
     doc = tmp_path / "contacts.json"
     doc.write_text('[{"name": "Ada Quinn", "organization": "Quinn Labs"}]', encoding="utf-8")
 
-    result = import_tranche2_file(session, "contacts", doc)
+    result = import_file(session, "contacts", doc)
 
-    assert result["proposals_new"] == 2  # one organization + one person
+    assert result.proposals_new == 2  # one organization + one person
     types = {p.entity_type for p in list_pending(session)}
     assert types == {"organization", "person"}
 
@@ -210,8 +210,8 @@ def test_accepting_organization_writes_org_and_link(
 ) -> None:
     doc = tmp_path / "contacts.json"
     doc.write_text('[{"name": "Ada Quinn", "organization": "Quinn Labs"}]', encoding="utf-8")
-    result = import_tranche2_file(session, "contacts", doc)
-    assert result["proposals_new"] == 2
+    result = import_file(session, "contacts", doc)
+    assert result.proposals_new == 2
 
     org_prop = next(p for p in list_pending(session) if p.entity_type == "organization")
     org = accept(session, org_prop.id)

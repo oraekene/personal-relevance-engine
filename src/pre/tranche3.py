@@ -19,10 +19,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy.orm import Session
-
-from pre.models import SourceSyncState
-from pre.queue import Proposal, propose
+from pre.queue import Proposal
 
 _DOMAIN = re.compile(r"([a-z0-9-]+)\.(com|io|dev|ai|org|net|co|app)")
 
@@ -120,44 +117,3 @@ def parse_work_systems(path: str | Path) -> list[Proposal]:
             )
         )
     return proposals
-
-
-PARSERS = {
-    "device": parse_device_history,
-    "health": parse_health_export,
-    "work-systems": parse_work_systems,
-}
-
-
-def import_tranche3_file(session: Session, kind: str, path: str | Path) -> dict[str, int]:
-    """Full history on first connect, deltas after — same mechanics as tranches 1–2."""
-    if kind not in PARSERS:
-        raise ValueError(f"unknown kind {kind!r}; expected one of {sorted(PARSERS)}")
-    tier = kind if kind != "work-systems" else "work-systems"
-    source_ref = str(path)
-
-    state = (
-        session.query(SourceSyncState).filter_by(tier=tier, source_ref=source_ref).one_or_none()
-    )
-    if state is None:
-        state = SourceSyncState(tier=tier, source_ref=source_ref)
-        session.add(state)
-        session.flush()
-
-    proposals = PARSERS[kind](Path(path))
-    new_count = 0
-    strengthened = 0
-    for proposal in proposals:
-        confidence_before = proposal.confidence
-        row = propose(session, proposal)
-        if row.observations == 1 and row.status == "pending":
-            new_count += 1
-        elif row.confidence > confidence_before or row.observations > 1:
-            strengthened += 1
-
-    from pre.models import utcnow
-
-    state.records_seen += len(proposals)
-    state.last_sync_at = utcnow()
-    session.commit()
-    return {"proposals_new": new_count, "strengthened": strengthened}
