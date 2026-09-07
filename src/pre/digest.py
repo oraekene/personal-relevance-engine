@@ -81,7 +81,6 @@ def assemble_digest(
     session: Session,
     kind: str,
     limit: int | None = None,
-    shadow: bool = False,
 ) -> list[DigestItem]:
     """Assemble one Digest from judged Changes passing their dimension's cell.
 
@@ -150,7 +149,6 @@ def assemble_digest(
         if len(items) >= cap:
             break
     session.commit()
-    _ = shadow  # delivery marking arrives with ticket 06; shadow digests never deliver
     return items
 
 

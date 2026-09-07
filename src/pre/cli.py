@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from pre.calibration import render_calibration
 from pre.change_corpus import ingest_entries
 from pre.coldstart import (
-    SHADOW,
     coverage_gate,
     get_mode,
     go_live,
@@ -517,8 +516,7 @@ def _cmd_matrix(args: argparse.Namespace) -> int:
 def _cmd_digest(args: argparse.Namespace) -> int:
     session = _open_session(args.db)
     try:
-        mode = get_mode(session)
-        assemble_digest(session, args.kind, limit=args.limit, shadow=(mode == SHADOW))
+        assemble_digest(session, args.kind, limit=args.limit)
         print(render_digest(session, args.kind))
         return 0
     except ValueError as exc:
