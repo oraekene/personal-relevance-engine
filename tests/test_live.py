@@ -138,3 +138,19 @@ def test_live_import_is_idempotent_delta(session: Session) -> None:
 def test_unknown_kind_rejected(session: Session) -> None:
     with pytest.raises(ValueError, match="unknown kind"):
         import_file(session, "sms", FIXTURES / "email.json")
+
+
+def test_universal_filter_drops_owned_vendor_tools(session: Session) -> None:
+    session.add(Tool(name="Github"))
+    session.commit()
+
+    result = import_file(session, "email", FIXTURES / "email.json")
+
+    assert result.skipped_known >= 1
+    pending_names = {
+        p.payload_json.get("name")
+        for p in list_pending(session)
+        if p.entity_type == "tool"
+    }
+    assert "Github" not in pending_names
+    assert any(p.entity_type == "person" for p in list_pending(session))

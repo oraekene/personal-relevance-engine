@@ -6,7 +6,7 @@ Four importers (`tranche1/2/3`, `live`) each carry their own ~20 lines of sync-s
 
 ## Solution
 
-A template-method importer hierarchy in `src/pre/ingest.py`: the base owns sync/propose/count/filter/result, one `LiveImporter` subclass overrides the post-import hook (auto-accept), and a registry maps all fourteen kinds to instances. Per-tier cutovers, each tier fully old or fully new at every commit, suite green throughout.
+A template-method importer hierarchy in `src/pre/ingest.py`: the base owns sync/propose/count/filter/result, one `LiveImporter` subclass overrides the post-import hook (auto-accept), and a registry maps all twelve kinds to instances. Per-tier cutovers, each tier fully old or fully new at every commit, suite green throughout.
 
 ## Commits
 
@@ -19,7 +19,7 @@ A template-method importer hierarchy in `src/pre/ingest.py`: the base owns sync/
 - Shape: importer classes with template method (grill Q1, user pick) — kept minimal: one base, one `LiveImporter` subclass; per-kind variance that is pure data (tier strings) stays constructor data, not subclasses.
 - Result: single `ImportResult` dataclass (tranche1's plus `skipped_known`/`auto_accepted` defaults); uniform CLI summary (grill Q2) — no test pins print text.
 - Filter: universal known-tools filter as base behavior (grill Q3) — ticket 09 states it as a general criterion; tranche1/3/live queues get quieter; suite shows exact deltas.
-- Keys/counts: registry keyed by the 14 kind names; live declares the `live-` tier prefix; `records_seen` counts what reached `propose()` with skipped reported separately; tautology deleted (grill Q4).
+- Keys/counts: registry keyed by the 12 kind names; live declares the `live-` tier prefix; `records_seen` counts what reached `propose()` with skipped reported separately; tautology deleted (grill Q4).
 - Migration: per-tier cutovers as above (grill Q5) — each tier fully old or fully new per commit.
 
 ## Testing Decisions
@@ -42,4 +42,5 @@ A template-method importer hierarchy in `src/pre/ingest.py`: the base owns sync/
 - Implemented in commits 75d62ea (1: base + ImportResult + tranche1 over) → c14898d (tranche1 orphan removal) → 38817aa (2: tranche2+3 over, tautology deleted, filter universal) → ce7abda (3: live over via `LiveImporter.post_import`, `KINDS` + old entries deleted).
 - Shape note: variance collapsed further than grilled — universal filter (no opt-in flag) and single result shape leave exactly one behavioral override, so the hierarchy is one base plus one `LiveImporter`; tier strings stay constructor data. Registry holds all 14 kinds; parsers never moved.
 - Universal filter caused zero test deltas (fixtures run against empty/tool-less profiles); `records_seen` now counts what reached `propose()` everywhere.
+- Review follow-ups (same turn): CLI print helper now returns str (`render_import_result`, killing a Data Clump — tier/path already ride the result); registry test pins all 12 kinds incl. live; new live test fires the universal filter on tranche1/3/live paths for the first time (seeded Github skipped, person still queued); `LiveImporter` added to `__all__`; single-subclass hierarchy kept per the grill tripwire (collapse to a flag if no second behavioral subclass appears). Deferred to C4: deriving argparse kind-choices from the registry so a new kind stops touching three places.
 - Verification: ten-tiers test rewritten against the unified registry; full suite 174 passing on every commit, mypy strict, ruff clean.

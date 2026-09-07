@@ -284,10 +284,10 @@ def _cmd_changes(args: argparse.Namespace) -> int:
         session.close()
 
 
-def _print_import_result(kind: str, path: str, result: ImportResult) -> None:
+def render_import_result(result: ImportResult) -> str:
     mode = "first connect (full history)" if result.first_connect else "delta"
-    print(
-        f"Imported {kind}:{path} [{mode}] — "
+    return (
+        f"Imported {result.tier}:{result.source_ref} [{mode}] — "
         f"{result.proposals_new} new proposals, "
         f"{result.proposals_strengthened} strengthened, "
         f"{result.skipped_known} skipped (already owned), "
@@ -299,7 +299,7 @@ def _cmd_import(args: argparse.Namespace) -> int:
     session = _open_session(args.db)
     try:
         result = import_file(session, args.tier, args.file)
-        _print_import_result(args.tier, args.file, result)
+        print(render_import_result(result))
         return 0
     except Exception as exc:  # noqa: BLE001 -- CLI boundary; print any failure readably
         print(f"import failed: {exc}", file=sys.stderr)
@@ -378,7 +378,7 @@ def _cmd_import2(args: argparse.Namespace) -> int:
     session = _open_session(args.db)
     try:
         result = import_file(session, args.kind, args.file)
-        _print_import_result(args.kind, args.file, result)
+        print(render_import_result(result))
         return 0
     except Exception as exc:  # noqa: BLE001 -- CLI boundary; print any failure readably
         print(f"import2 failed: {exc}", file=sys.stderr)
@@ -391,7 +391,7 @@ def _cmd_import_live(args: argparse.Namespace) -> int:
     session = _open_session(args.db)
     try:
         result = import_file(session, args.kind, args.file)
-        _print_import_result(f"live-{args.kind}", args.file, result)
+        print(render_import_result(result))
         return 0
     except Exception as exc:  # noqa: BLE001 -- CLI boundary; print any failure readably
         print(f"import-live failed: {exc}", file=sys.stderr)
@@ -404,7 +404,7 @@ def _cmd_import3(args: argparse.Namespace) -> int:
     session = _open_session(args.db)
     try:
         result = import_file(session, args.kind, args.file)
-        _print_import_result(args.kind, args.file, result)
+        print(render_import_result(result))
         return 0
     except Exception as exc:  # noqa: BLE001 -- CLI boundary; print any failure readably
         print(f"import3 failed: {exc}", file=sys.stderr)

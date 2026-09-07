@@ -131,4 +131,4 @@ def import_file(session: Session, kind: str, path: str | Path) -> ImportResult:
     return importer.import_file(session, path)
 
 
-__all__ = ["IMPORTERS", "BaseImporter", "ImportResult", "ParserFn", "import_file"]
+__all__ = ["IMPORTERS", "BaseImporter", "ImportResult", "LiveImporter", "ParserFn", "import_file"]

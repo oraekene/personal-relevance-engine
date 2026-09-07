@@ -151,5 +151,6 @@ def test_all_kinds_wired_to_single_registry(session: Session) -> None:
         "financial", "commerce", "takeout",
         "comms", "notes", "social", "contacts",
         "device", "health", "work-systems",
+        "calendar", "email",
     } <= set(IMPORTERS)
     assert list_pending(session) == []
