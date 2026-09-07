@@ -22,6 +22,7 @@ from pre.coverage import render_coverage
 from pre.db import DEFAULT_DB_URL, init_db, make_engine, make_session_factory
 from pre.digest import assemble_digest, render_digest, render_matrix, set_cell
 from pre.firehose import fetch_feed, parse_feed
+from pre.ingest import ImportResult, import_file
 from pre.intake import apply_intake_file
 from pre.judge import JudgeVerdict, LLMJudge
 from pre.live import import_live_file
@@ -39,7 +40,6 @@ from pre.queue import accept, reject, render_pending
 from pre.retrieval import index_all, render_shortlist, shortlist_for_change
 from pre.scoring import judge_change, render_scores
 from pre.taxonomy import DIMENSIONS, validate
-from pre.tranche1 import import_source_file
 from pre.tranche2 import import_tranche2_file
 from pre.tranche3 import import_tranche3_file
 from pre.verdicts import record_verdict, render_verdict_summary
@@ -287,16 +287,22 @@ def _cmd_changes(args: argparse.Namespace) -> int:
         session.close()
 
 
+def _print_import_result(kind: str, path: str, result: ImportResult) -> None:
+    mode = "first connect (full history)" if result.first_connect else "delta"
+    print(
+        f"Imported {kind}:{path} [{mode}] — "
+        f"{result.proposals_new} new proposals, "
+        f"{result.proposals_strengthened} strengthened, "
+        f"{result.skipped_known} skipped (already owned), "
+        f"{result.auto_accepted} auto-accepted."
+    )
+
+
 def _cmd_import(args: argparse.Namespace) -> int:
     session = _open_session(args.db)
     try:
-        result = import_source_file(session, args.tier, args.file)
-        mode = "first connect (full history)" if result.first_connect else "delta"
-        print(
-            f"Imported {args.tier}:{args.file} [{mode}] — "
-            f"{result.proposals_new} new proposals, "
-            f"{result.proposals_strengthened} strengthened."
-        )
+        result = import_file(session, args.tier, args.file)
+        _print_import_result(args.tier, args.file, result)
         return 0
     except Exception as exc:  # noqa: BLE001 -- CLI boundary; print any failure readably
         print(f"import failed: {exc}", file=sys.stderr)

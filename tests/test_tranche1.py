@@ -6,10 +6,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from pre.ingest import import_file
 from pre.models import ProposedAssertion, SourceSyncState, Tool
 from pre.parsers import parse_commerce_csv, parse_financial_csv, parse_takeout_activity
 from pre.queue import accept, list_pending, propose, reject
-from pre.tranche1 import import_source_file
 from pre.watchlist import active_watchlist_product_names
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -137,11 +137,11 @@ def test_reject_marks_decision(session: Session) -> None:
 
 
 def test_import_full_history_then_delta_is_idempotent(session: Session) -> None:
-    first = import_source_file(session, "financial", FIXTURES / "transactions.csv")
+    first = import_file(session, "financial", FIXTURES / "transactions.csv")
     assert first.first_connect is True
     assert first.proposals_new == 4
 
-    second = import_source_file(session, "financial", FIXTURES / "transactions.csv")
+    second = import_file(session, "financial", FIXTURES / "transactions.csv")
     assert second.first_connect is False
     assert second.proposals_new == 0
     assert session.query(ProposedAssertion).count() == 4
@@ -151,9 +151,9 @@ def test_import_full_history_then_delta_is_idempotent(session: Session) -> None:
 
 
 def test_queue_never_writes_profile_directly(session: Session) -> None:
-    import_source_file(session, "financial", FIXTURES / "transactions.csv")
-    import_source_file(session, "commerce", FIXTURES / "orders.csv")
-    import_source_file(session, "takeout", FIXTURES / "myactivity.json")
+    import_file(session, "financial", FIXTURES / "transactions.csv")
+    import_file(session, "commerce", FIXTURES / "orders.csv")
+    import_file(session, "takeout", FIXTURES / "myactivity.json")
 
     # Nothing accepted yet: the Profile's Tools table must still be empty.
     assert session.query(Tool).count() == 0
@@ -163,7 +163,7 @@ def test_queue_never_writes_profile_directly(session: Session) -> None:
 def test_accepted_extraction_tool_joins_watchlist(session: Session) -> None:
     from pre.watchlist import sync_watchlist
 
-    import_source_file(session, "financial", FIXTURES / "transactions.csv")
+    import_file(session, "financial", FIXTURES / "transactions.csv")
     pending = list_pending(session)
     netflix = next(p for p in pending if p.payload_json.get("name") == "Netflix")
 
