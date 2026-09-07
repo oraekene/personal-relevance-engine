@@ -25,7 +25,6 @@ from pre.firehose import fetch_feed, parse_feed
 from pre.ingest import ImportResult, import_file
 from pre.intake import apply_intake_file
 from pre.judge import JudgeVerdict, LLMJudge
-from pre.live import import_live_file
 from pre.models import Change
 from pre.ops import (
     backup_database,
@@ -391,12 +390,8 @@ def _cmd_import2(args: argparse.Namespace) -> int:
 def _cmd_import_live(args: argparse.Namespace) -> int:
     session = _open_session(args.db)
     try:
-        result = import_live_file(session, args.kind, args.file)
-        print(
-            f"Pulled live-{args.kind}:{args.file} — {result['proposals_new']} new proposals, "
-            f"{result['strengthened']} strengthened, {result['auto_accepted']} auto-accepted "
-            f"(pre-approved class)."
-        )
+        result = import_file(session, args.kind, args.file)
+        _print_import_result(f"live-{args.kind}", args.file, result)
         return 0
     except Exception as exc:  # noqa: BLE001 -- CLI boundary; print any failure readably
         print(f"import-live failed: {exc}", file=sys.stderr)

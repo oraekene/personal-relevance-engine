@@ -14,9 +14,10 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from pre.live import parse_calendar_events, parse_email_messages
 from pre.models import SourceSyncState, Tool
 from pre.parsers import parse_commerce_csv, parse_financial_csv, parse_takeout_activity
-from pre.queue import Proposal, propose
+from pre.queue import Proposal, propose, run_auto_accept
 from pre.tranche2 import (
     parse_comms_json,
     parse_contacts_json,
@@ -89,6 +90,16 @@ class BaseImporter:
         return result
 
 
+class LiveImporter(BaseImporter):
+    """Live connectors: same pipeline plus the auto-accept rule (ticket 12)."""
+
+    def __init__(self, kind: str, parser: ParserFn) -> None:
+        super().__init__(kind, parser, tier=f"live-{kind}")
+
+    def post_import(self, session: Session) -> int:
+        return run_auto_accept(session)
+
+
 def _filter_known_tools(session: Session, proposals: list[Proposal]) -> list[Proposal]:
     """Spec criterion (ticket 09): proposals deduplicate against owned Tools."""
     existing = {name.lower() for name in session.scalars(select(Tool.name)).all()}
@@ -106,6 +117,8 @@ IMPORTERS: dict[str, BaseImporter] = {
     "device": BaseImporter("device", parse_device_history),
     "health": BaseImporter("health", parse_health_export),
     "work-systems": BaseImporter("work-systems", parse_work_systems),
+    "calendar": LiveImporter("calendar", parse_calendar_events),
+    "email": LiveImporter("email", parse_email_messages),
 }
 
 

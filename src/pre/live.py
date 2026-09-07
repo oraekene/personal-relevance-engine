@@ -21,10 +21,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy.orm import Session
-
-from pre.models import SourceSyncState
-from pre.queue import Proposal, propose, run_auto_accept
+from pre.queue import Proposal
 
 _KNOWN_VENDORS = (
     "notion", "obsidian", "figma", "slack", "github", "linear", "vercel", "openai",
@@ -113,46 +110,3 @@ def parse_email_messages(path: str | Path) -> list[Proposal]:
                 )
             )
     return proposals
-
-
-KINDS = {"calendar": parse_calendar_events, "email": parse_email_messages}
-
-
-def import_live_file(session: Session, kind: str, path: str | Path) -> dict[str, int]:
-    """Pull one live-source document into the queue, then run the auto-accept rule."""
-    if kind not in KINDS:
-        raise ValueError(f"unknown kind {kind!r}; expected one of {sorted(KINDS)}")
-    tier = f"live-{kind}"
-    source_ref = str(path)
-
-    state = (
-        session.query(SourceSyncState).filter_by(tier=tier, source_ref=source_ref).one_or_none()
-    )
-    if state is None:
-        state = SourceSyncState(tier=tier, source_ref=source_ref)
-        session.add(state)
-        session.flush()
-
-    proposals = KINDS[kind](Path(path))
-    new_count = 0
-    strengthened = 0
-    for proposal in proposals:
-        confidence_before = proposal.confidence
-        row = propose(session, proposal)
-        if row.observations == 1 and row.status == "pending":
-            new_count += 1
-        elif row.confidence > confidence_before or row.observations > 1:
-            strengthened += 1
-
-    from pre.models import utcnow
-
-    state.records_seen += len(proposals)
-    state.last_sync_at = utcnow()
-    session.commit()
-
-    auto_accepted = run_auto_accept(session)
-    return {
-        "proposals_new": new_count,
-        "strengthened": strengthened,
-        "auto_accepted": auto_accepted,
-    }

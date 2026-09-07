@@ -6,8 +6,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from pre.ingest import import_file
 from pre.intake import apply_intake_dict
-from pre.live import import_live_file, parse_calendar_events, parse_email_messages
+from pre.live import parse_calendar_events, parse_email_messages
 from pre.models import Activity, Person, ProposedAssertion, Tool
 from pre.queue import list_pending
 from pre.watchlist import active_watchlist_product_names, sync_watchlist
@@ -28,10 +29,10 @@ def test_calendar_parser_extracts_recurring_titles() -> None:
 
 
 def test_calendar_proposals_wait_for_manual_acceptance(session: Session) -> None:
-    result = import_live_file(session, "calendar", FIXTURES / "calendar.json")
+    result = import_file(session, "calendar", FIXTURES / "calendar.json")
 
-    assert result["proposals_new"] == 2
-    assert result["auto_accepted"] == 0  # activities are structural -> human decides
+    assert result.proposals_new == 2
+    assert result.auto_accepted == 0  # activities are structural -> human decides
     pending_types = {p.entity_type for p in list_pending(session)}
     assert pending_types == {"activity"}
 
@@ -39,7 +40,7 @@ def test_calendar_proposals_wait_for_manual_acceptance(session: Session) -> None
 def test_activity_acceptance_requires_parent_need(session: Session) -> None:
     from pre.queue import accept
 
-    import_live_file(session, "calendar", FIXTURES / "calendar.json")
+    import_file(session, "calendar", FIXTURES / "calendar.json")
     proposal = next(p for p in list_pending(session))
 
     # Without need_id the acceptance is refused:
@@ -91,9 +92,9 @@ def test_email_parser_frequent_senders_and_vendor_subjects() -> None:
 
 
 def test_auto_accept_class_fires_with_audit_trail(session: Session) -> None:
-    result = import_live_file(session, "email", FIXTURES / "email.json")
+    result = import_file(session, "email", FIXTURES / "email.json")
 
-    assert result["auto_accepted"] >= 2  # Github + Linear at confidence 0.9
+    assert result.auto_accepted >= 2  # Github + Linear at confidence 0.9
     accepted = (
         session.scalars(
             select(ProposedAssertion).where(ProposedAssertion.status == "accepted")
@@ -106,7 +107,7 @@ def test_auto_accept_class_fires_with_audit_trail(session: Session) -> None:
 
 
 def test_accepted_live_tools_join_watchlist(session: Session) -> None:
-    import_live_file(session, "email", FIXTURES / "email.json")
+    import_file(session, "email", FIXTURES / "email.json")
     sync_watchlist(session)
 
     names = active_watchlist_product_names(session)
@@ -114,7 +115,7 @@ def test_accepted_live_tools_join_watchlist(session: Session) -> None:
 
 
 def test_people_from_email_stay_pending_for_human_decision(session: Session) -> None:
-    import_live_file(session, "email", FIXTURES / "email.json")
+    import_file(session, "email", FIXTURES / "email.json")
 
     person_props = [p for p in list_pending(session) if p.entity_type == "person"]
     assert len(person_props) == 1
@@ -122,18 +123,18 @@ def test_people_from_email_stay_pending_for_human_decision(session: Session) -> 
 
 
 def test_live_import_is_idempotent_delta(session: Session) -> None:
-    first = import_live_file(session, "email", FIXTURES / "email.json")
-    second = import_live_file(session, "email", FIXTURES / "email.json")
+    first = import_file(session, "email", FIXTURES / "email.json")
+    second = import_file(session, "email", FIXTURES / "email.json")
 
-    assert second["proposals_new"] == 0
-    assert second["auto_accepted"] == 0  # already decided on first pull
+    assert second.proposals_new == 0
+    assert second.auto_accepted == 0  # already decided on first pull
     # Total rows never grows: accepted + pending == what the first pull proposed.
     total = session.query(ProposedAssertion).count()
-    assert total == first["proposals_new"]
+    assert total == first.proposals_new
     pending_after = len(list_pending(session))
-    assert pending_after == first["proposals_new"] - first["auto_accepted"]
+    assert pending_after == first.proposals_new - first.auto_accepted
 
 
 def test_unknown_kind_rejected(session: Session) -> None:
     with pytest.raises(ValueError, match="unknown kind"):
-        import_live_file(session, "sms", FIXTURES / "email.json")
+        import_file(session, "sms", FIXTURES / "email.json")
