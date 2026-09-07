@@ -1,0 +1,3 @@
+# Explicit CLI session lifecycle over a shared context manager
+
+Every `pre` command opens its session, maps errors to exit codes, and closes in a `finally` — four repeated lines per handler — rather than sharing a session context manager. The shape is stable, obviously correct, and keeps each handler's error policy visible next to it; centralizing it would add a shared construct (with edge cases like backup's copy-first ordering and serve's sessionless shape) to save ~90 lines that never change together. Reopening this decision is cheap at any point, and should happen if and only if session lifecycle gains behavior (pooling, retries, read-only transactions, per-command timing) — until then the repetition is explicitness, not rot.
