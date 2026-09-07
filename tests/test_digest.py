@@ -6,11 +6,13 @@ import pytest
 from sqlalchemy.orm import Session
 
 from pre.change_corpus import FirehoseEntry, ingest_entries
+from pre.coldstart import set_mode
 from pre.digest import (
     DEFAULT_MIN_SCORES,
     DIGEST_LIMITS,
     assemble_digest,
     ensure_matrix,
+    mark_delivered,
     render_digest,
     render_matrix,
     set_cell,
@@ -210,3 +212,34 @@ def test_render_digest_shows_entity_dimension_reasoning(session: Session) -> Non
     assert "Apollo" in text
     assert "(business)" in text
     assert "you rely on Apollo" in text
+
+
+# --- delivery ownership (issue 20) --------------------------------------------------
+
+
+def test_render_digest_has_no_side_effects(session: Session) -> None:
+    change = _seed(session)
+    tool = session.query(Tool).one()
+    judge_change(session, change.id, ScriptedJudge({("tool", tool.id): (90, "relied on")}))
+    set_mode(session, "live")
+    assemble_digest(session, "daily")
+
+    first = render_digest(session, "daily")
+
+    assert render_digest(session, "daily") == first
+    assert all(item.delivered_at is None for item in session.query(DigestItem).all())
+
+
+def test_mark_delivered_marks_live_leaves_shadow(session: Session) -> None:
+    change = _seed(session)
+    tool = session.query(Tool).one()
+    judge_change(session, change.id, ScriptedJudge({("tool", tool.id): (90, "relied on")}))
+    assemble_digest(session, "daily")
+
+    assert mark_delivered(session, "daily") == 0  # shadow default: no-op
+    assert all(item.delivered_at is None for item in session.query(DigestItem).all())
+
+    set_mode(session, "live")
+    assert mark_delivered(session, "daily") == 1
+    assert all(item.delivered_at is not None for item in session.query(DigestItem).all())
+    assert mark_delivered(session, "daily") == 0  # idempotent

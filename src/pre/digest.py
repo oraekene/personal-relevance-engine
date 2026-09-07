@@ -14,7 +14,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pre.models import Change, ChangeScore, DigestItem, ThresholdCell
+from pre.models import Change, ChangeScore, DigestItem, ThresholdCell, utcnow
 from pre.profile import dimension_of, is_stale, label_of
 from pre.taxonomy import DIMENSIONS
 
@@ -152,6 +152,29 @@ def assemble_digest(
     return items
 
 
+def mark_delivered(session: Session, kind: str) -> int:
+    """Mark this kind's items delivered when live; no-op in shadow. Returns count.
+
+    The single owner of the delivery invariant — every serving surface calls
+    this instead of marking inline, so shadow can never mark by mistake.
+    """
+    from pre.coldstart import LIVE, get_mode
+
+    if get_mode(session) != LIVE:
+        return 0
+    now = utcnow()
+    marked = 0
+    for item in session.scalars(
+        select(DigestItem).where(
+            DigestItem.digest_kind == kind, DigestItem.delivered_at.is_(None)
+        )
+    ).all():
+        item.delivered_at = now
+        marked += 1
+    session.commit()
+    return marked
+
+
 def surface_unscored_urgent(session: Session, kind: str = "daily") -> int:
     """Cold start (ticket 13): urgent Watchlist Changes surface labeled UNSCORED."""
     added = 0
@@ -181,7 +204,6 @@ def surface_unscored_urgent(session: Session, kind: str = "daily") -> int:
 
 def render_digest(session: Session, kind: str) -> str:
     from pre.coldstart import get_mode
-    from pre.models import utcnow
 
     mode = get_mode(session)
     items = session.scalars(
@@ -201,7 +223,6 @@ def render_digest(session: Session, kind: str) -> str:
         if change:
             lines.append(f"      [{change.change_type}] {change.product_name}: {change.title}")
         lines.append(f"      why: {item.reasoning}")
-    _ = utcnow
     return "\n".join(lines)
 
 
@@ -210,6 +231,7 @@ __all__ = [
     "DIGEST_LIMITS",
     "assemble_digest",
     "ensure_matrix",
+    "mark_delivered",
     "render_digest",
     "render_matrix",
     "set_cell",

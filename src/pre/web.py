@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import html
 import os
-from datetime import UTC, datetime
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import RedirectResponse
@@ -19,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from pre.coldstart import get_mode
+from pre.digest import mark_delivered
 from pre.models import DigestItem
 from pre.verdicts import VALID_VERDICTS, record_verdict
 
@@ -74,6 +74,7 @@ def _item_html(session: Session, item: DigestItem) -> str:
 
 
 def _digest_html(session: Session, kind: str) -> str:
+    mark_delivered(session, kind)
     mode = get_mode(session)
     items = session.scalars(
         select(DigestItem).where(DigestItem.digest_kind == kind).order_by(DigestItem.score.desc())
@@ -81,12 +82,6 @@ def _digest_html(session: Session, kind: str) -> str:
     if not items:
         body = "<p>(nothing passed the thresholds)</p>"
     else:
-        if mode == "live":
-            now = datetime_now_utc()
-            for item in items:
-                if item.delivered_at is None:
-                    item.delivered_at = now
-            session.commit()
         body = "".join(_item_html(session, item) for item in items)
     other = "weekly" if kind == "daily" else "daily"
     nav = f"<p><a href='/digest/{other}'>switch to {other}</a> · <a href='/'>overview</a></p>"
@@ -94,10 +89,6 @@ def _digest_html(session: Session, kind: str) -> str:
         mode == "shadow"
     ) else ""
     return _page(f"{kind} digest", shadow + body + nav)
-
-
-def datetime_now_utc() -> datetime:
-    return datetime.now(UTC)
 
 
 def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:

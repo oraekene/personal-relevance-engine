@@ -127,6 +127,14 @@ def test_push_link_shape() -> None:
     )
 
 
+def test_shadow_serve_marks_nothing(client, session: Session) -> None:
+    _seed_and_assemble(session)  # default mode is shadow
+
+    assert client.get("/digest/daily").status_code == 200
+    session.expire_all()
+    assert session.query(DigestItem).one().delivered_at is None
+
+
 def test_live_mode_marks_items_delivered_on_serve(
     client, session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
