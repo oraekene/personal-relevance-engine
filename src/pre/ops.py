@@ -24,8 +24,8 @@ from typing import Protocol
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from pre.cost_meter import monthly_cap_cents, render_costs
-from pre.models import Change, ChangeScore, DigestItem, LLMCallLog, SystemFlag, VerdictLog
+from pre.cost_meter import monthly_cap_cents, render_costs, spend_by_month
+from pre.models import Change, ChangeScore, DigestItem, SystemFlag, VerdictLog
 
 PROVIDER_FAILURES_KEY = "provider_consec_failures"
 BACKUP_KEY = "backup_last_at"
@@ -41,15 +41,6 @@ def retention_days() -> int:
     except ValueError:
         return DEFAULT_RETENTION_DAYS
     return parsed if parsed > 0 else DEFAULT_RETENTION_DAYS
-
-
-def spend_by_month(session: Session) -> dict[str, float]:
-    """MTD-cost history grouped by YYYY-MM (UTC) for the per-period dashboard."""
-    totals: dict[str, float] = {}
-    for row in session.scalars(select(LLMCallLog)).all():
-        key = f"{row.called_at.year:04d}-{row.called_at.month:02d}"
-        totals[key] = totals.get(key, 0.0) + row.cost_usd_cents
-    return totals
 
 
 @dataclass(frozen=True)
@@ -285,5 +276,4 @@ __all__ = [
     "render_ops_dashboard",
     "restore_database",
     "retention_days",
-    "spend_by_month",
 ]

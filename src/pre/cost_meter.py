@@ -67,6 +67,15 @@ def month_to_date_cents(session: Session, now: datetime | None = None) -> float:
     return sum(row.cost_usd_cents for row in rows)
 
 
+def spend_by_month(session: Session) -> dict[str, float]:
+    """Cost history grouped by YYYY-MM (UTC) for the per-period dashboard."""
+    totals: dict[str, float] = {}
+    for row in session.scalars(select(LLMCallLog)).all():
+        key = f"{row.called_at.year:04d}-{row.called_at.month:02d}"
+        totals[key] = totals.get(key, 0.0) + row.cost_usd_cents
+    return totals
+
+
 @dataclass(frozen=True)
 class CapStatus:
     spent_cents: float

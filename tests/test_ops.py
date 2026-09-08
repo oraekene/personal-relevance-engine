@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from pre.change_corpus import FirehoseEntry, ingest_entries
-from pre.cost_meter import CallRecord, log_call
+from pre.cost_meter import CallRecord, log_call, spend_by_month
 from pre.db import init_db, make_engine, make_session_factory
 from pre.digest import assemble_digest
 from pre.intake import apply_intake_dict
@@ -22,7 +22,6 @@ from pre.ops import (
     record_provider_result,
     render_ops_dashboard,
     restore_database,
-    spend_by_month,
 )
 from pre.retrieval import index_all
 from pre.scoring import judge_change
