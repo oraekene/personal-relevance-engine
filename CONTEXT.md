@@ -24,6 +24,10 @@ _Avoid_: subscriptions, followed products
 The complete structured model of the user, organized as a goal hierarchy: Life Dimension → Goals → Needs → Activities → Tasks → Tools. Built from a structured interview skeleton plus full data extraction from source systems; the matching engine's primary input.
 _Avoid_: user model, persona
 
+**Interview**:
+The guided onboarding flow that builds the Profile skeleton: seventeen Life Dimension steps with satisfaction scores, resumable across sessions, ending when the coverage gate passes. Every Interview-sourced assertion carries source=interview.
+_Avoid_: survey, questionnaire, signup
+
 **Life Dimension**:
 A top-level area of the user's life. Canonical set of 17: Physical Health, Mental & Emotional Wellbeing, Career, Business, Financial, Social, Relationship, Family, Housing & Home, Community & Civic, Education & Learning, Leisure & Recreation, Environment & Surroundings, Safety & Security, Spirituality & Meaning, Reputational, Autonomy & Time. Research-derived taxonomy in `docs/research/life-dimension-taxonomies.md`. Each Dimension carries a satisfaction score; the root of each branch of the Profile hierarchy.
 _Avoid_: domain (overloaded), category
