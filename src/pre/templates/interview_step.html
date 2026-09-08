@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Interview — {{ step.name }}{% endblock %}
+{% block body %}
+<h1>{{ step.name }}</h1>
+<p class='muted'>Step {{ position }} of {{ total }} · {{ step.description }}</p>
+<p class='muted'>Think about: {{ step.sub_dimensions | join(', ') }}</p>
+{% if error %}<p class='flags'>{{ error }}</p>{% endif %}
+{% if goals %}
+<h2>Recorded goals</h2>
+<ul>
+{% for goal in goals %}<li><b>{{ goal.title }}</b>{% if goal.needs %} — needs: {{ goal.needs | join(', ') }}{% endif %}</li>{% endfor %}
+</ul>
+{% endif %}
+<form method='post' action='/interview/{{ step.code }}'>
+<label>Satisfaction (0–10, required): <input type='number' name='satisfaction' min='0' max='10' step='1' value='{{ step.satisfaction if step.satisfaction is not none else '' }}' required></label>
+<h2>Add goals</h2>
+{% for i in range(5) %}
+<fieldset>
+<legend>Goal {{ i + 1 }}</legend>
+<label>Title: <input type='text' name='goal_{{ i }}' maxlength='256'></label><br>
+<label>Needs (one per line):<br><textarea name='goal_{{ i }}_needs' rows='3' cols='40'></textarea></label>
+</fieldset>
+{% endfor %}
+<p><button type='submit'>Save and continue</button></p>
+</form>
+<p><a href='/'>overview</a></p>
+{% endblock %}

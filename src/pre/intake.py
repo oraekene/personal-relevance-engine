@@ -89,6 +89,16 @@ def _get_or_create_tool(session: Session, name: str) -> Tool:
 
 
 def _apply_goal(session: Session, dimension: LifeDimension, data: dict[str, Any]) -> Goal:
+    # Re-application is idempotent per goal title within a dimension: the web
+    # interview resubmits steps (refresh, back-button, resume), and batch files
+    # get re-run. The first write wins; later ones add nothing.
+    existing = session.scalar(
+        select(Goal).where(
+            Goal.dimension_id == dimension.id, Goal.title == data["title"]
+        )
+    )
+    if existing is not None:
+        return existing
     goal = Goal(
         dimension_id=dimension.id,
         title=data["title"],
@@ -205,3 +215,43 @@ def apply_intake_dict(session: Session, data: dict[str, Any]) -> IntakeSummary:
 def apply_intake_file(session: Session, path: str | Path) -> IntakeSummary:
     raw = Path(path).read_text(encoding="utf-8")
     return apply_intake_dict(session, yaml.safe_load(raw) or {})
+
+
+def apply_interview_step(
+    session: Session,
+    code: str,
+    satisfaction: str | int | None,
+    goals: list[dict[str, Any]],
+) -> IntakeSummary:
+    """Apply one interview wizard step: satisfaction plus goals for a dimension.
+
+    Shared core behind the HTML form and the JSON API. Blank goal titles are
+    skipped; satisfaction must be 0-10 (LifeDimension enforces the range);
+    re-submission adds nothing (goals dedupe per title within the dimension).
+    """
+    if code not in DIMENSIONS_BY_CODE:
+        raise ValueError(f"unknown dimension code {code!r}")
+    if not isinstance(satisfaction, (str, int)) or isinstance(satisfaction, bool):
+        raise TypeError("satisfaction must be a 0-10 number")
+    try:
+        score = int(satisfaction)
+    except ValueError:
+        raise ValueError("satisfaction must be 0-10") from None
+    parsed_goals = []
+    for g in goals:
+        title = str(g.get("title", "")).strip()
+        if not title:
+            continue
+        raw_needs = g.get("needs", [])
+        items = raw_needs.splitlines() if isinstance(raw_needs, str) else raw_needs
+        needs = []
+        for line in items:
+            text = line.get("title", "") if isinstance(line, dict) else line
+            text = str(text).strip()
+            if text:
+                needs.append({"title": text})
+        parsed_goals.append({"title": title, "needs": needs})
+    return apply_intake_dict(
+        session,
+        {"dimensions": [{"code": code, "satisfaction": score, "goals": parsed_goals}]},
+    )

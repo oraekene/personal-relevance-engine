@@ -21,10 +21,12 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from pre.coldstart import get_mode
+from pre.coldstart import coverage_gate, get_mode, go_live
 from pre.digest import ensure_matrix, mark_delivered
-from pre.models import DigestItem
+from pre.intake import apply_interview_step
+from pre.models import DigestItem, Goal, LifeDimension, Need
 from pre.ops import render_ops_dashboard
+from pre.taxonomy import DIMENSIONS, DIMENSIONS_BY_CODE
 from pre.verdicts import VALID_VERDICTS, record_verdict
 
 
@@ -49,6 +51,65 @@ def _require_token(request: Request) -> None:
 class VerdictIn(BaseModel):
     item_id: int
     choice: str
+
+
+class InterviewGoalIn(BaseModel):
+    title: str
+    needs: list[str] = []
+
+
+class InterviewStepIn(BaseModel):
+    satisfaction: int
+    goals: list[InterviewGoalIn] = []
+
+
+def _interview_progress(session: Session) -> list[dict[str, Any]]:
+    rows = {d.code: d for d in session.scalars(select(LifeDimension)).all()}
+    steps = []
+    for dim in DIMENSIONS:
+        row = rows.get(dim.code)
+        steps.append(
+            {
+                "code": dim.code,
+                "name": dim.name,
+                "description": dim.description,
+                "sub_dimensions": list(dim.sub_dimensions),
+                "satisfaction": row.satisfaction_score if row else None,
+                "done": row is not None and row.satisfaction_score is not None,
+            }
+        )
+    return steps
+
+
+def _next_step_code(session: Session) -> str | None:
+    for step in _interview_progress(session):
+        if not step["done"]:
+            return str(step["code"])
+    return None
+
+
+def _step_view(
+    session: Session, code: str, error: str | None = None
+) -> dict[str, Any] | None:
+    steps = _interview_progress(session)
+    position = next((i for i, s in enumerate(steps) if s["code"] == code), None)
+    if position is None:
+        return None
+    goals: list[dict[str, Any]] = []
+    row = session.scalar(select(LifeDimension).where(LifeDimension.code == code))
+    if row is not None:
+        for goal in session.scalars(select(Goal).where(Goal.dimension_id == row.id)).all():
+            need_titles = [
+                n.title for n in session.scalars(select(Need).where(Need.goal_id == goal.id)).all()
+            ]
+            goals.append({"title": goal.title, "needs": need_titles})
+    return {
+        "step": steps[position],
+        "position": position + 1,
+        "total": len(steps),
+        "goals": goals,
+        "error": error,
+    }
 
 
 def _item_json(item: DigestItem) -> dict[str, Any]:
@@ -112,10 +173,9 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             weekly = session.scalar(
                 select(DigestItem).where(DigestItem.digest_kind == "weekly")
             )
-            from pre.coldstart import coverage_gate
-
             gate = coverage_gate(session)
             state = get_mode(session)
+            steps = _interview_progress(session)
             return Response(
                 _render(
                     "overview.html",
@@ -123,6 +183,8 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
                     weekly=bool(weekly),
                     state=state,
                     gate_passed=gate.passed,
+                    done_steps=sum(1 for s in steps if s["done"]),
+                    total_steps=len(steps),
                 ),
                 media_type="text/html",
             )
@@ -151,6 +213,109 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             return RedirectResponse(target, status_code=303)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            session.close()
+
+    @app.get("/interview")
+    def interview_index() -> Response:
+        session = session_factory()
+        try:
+            nxt = _next_step_code(session)
+            target = f"/interview/{nxt}" if nxt else "/interview/done"
+            return RedirectResponse(target, status_code=303)
+        finally:
+            session.close()
+
+    @app.get("/interview/done")
+    def interview_done() -> Response:
+        session = session_factory()
+        try:
+            gate = coverage_gate(session)
+            steps = _interview_progress(session)
+            done = sum(1 for s in steps if s["done"])
+            return Response(
+                _render(
+                    "interview_done.html",
+                    passed=gate.passed,
+                    failures=gate.failures,
+                    done=done,
+                    total=len(steps),
+                    error=None,
+                ),
+                media_type="text/html",
+            )
+        finally:
+            session.close()
+
+    @app.post("/interview/go-live")
+    def interview_go_live() -> Response:
+        session = session_factory()
+        try:
+            try:
+                go_live(session)
+            except PermissionError:
+                gate = coverage_gate(session)
+                steps = _interview_progress(session)
+                done = sum(1 for s in steps if s["done"])
+                return Response(
+                    _render(
+                        "interview_done.html",
+                        passed=False,
+                        failures=gate.failures,
+                        done=done,
+                        total=len(steps),
+                        error="Coverage gate has not passed yet.",
+                    ),
+                    status_code=409,
+                    media_type="text/html",
+                )
+            return RedirectResponse("/", status_code=303)
+        finally:
+            session.close()
+
+    @app.get("/interview/{code}")
+    def interview_step(code: str) -> Response:
+        session = session_factory()
+        try:
+            view = _step_view(session, code)
+            if view is None:
+                raise HTTPException(status_code=404, detail="unknown dimension")
+            return Response(_render("interview_step.html", **view), media_type="text/html")
+        finally:
+            session.close()
+
+    @app.post("/interview/{code}")
+    async def interview_submit(code: str, request: Request) -> Response:
+        if code not in DIMENSIONS_BY_CODE:
+            raise HTTPException(status_code=404, detail="unknown dimension")
+        form = await request.form()
+        raw_satisfaction = form.get("satisfaction")
+        satisfaction = raw_satisfaction if isinstance(raw_satisfaction, str) else None
+        goals = []
+        for i in range(5):
+            title = str(form.get(f"goal_{i}", "") or "").strip()
+            if not title:
+                continue
+            raw = str(form.get(f"goal_{i}_needs", "") or "")
+            goals.append(
+                {
+                    "title": title,
+                    "needs": [ln.strip() for ln in raw.splitlines() if ln.strip()],
+                }
+            )
+        session = session_factory()
+        try:
+            try:
+                apply_interview_step(session, code, satisfaction, goals)
+            except (ValueError, TypeError) as exc:
+                view = _step_view(session, code, error=str(exc))
+                assert view is not None  # code checked above
+                return Response(
+                    _render("interview_step.html", **view),
+                    status_code=400,
+                    media_type="text/html",
+                )
+            return RedirectResponse("/interview", status_code=303)
         finally:
             session.close()
 
@@ -222,6 +387,67 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
         session = session_factory()
         try:
             return {"dashboard": render_ops_dashboard(session)}
+        finally:
+            session.close()
+
+    @app.get("/api/interview")
+    def api_interview(request: Request) -> dict[str, Any]:
+        _require_token(request)
+        session = session_factory()
+        try:
+            steps = _interview_progress(session)
+            gate = coverage_gate(session)
+            return {
+                "steps": [
+                    {
+                        "code": s["code"],
+                        "name": s["name"],
+                        "done": s["done"],
+                        "satisfaction": s["satisfaction"],
+                    }
+                    for s in steps
+                ],
+                "done": sum(1 for s in steps if s["done"]),
+                "total": len(steps),
+                "gate_passed": gate.passed,
+                "gate_failures": gate.failures,
+            }
+        finally:
+            session.close()
+
+    @app.post("/api/interview/{code}")
+    def api_interview_step(
+        code: str, payload: InterviewStepIn, request: Request
+    ) -> dict[str, Any]:
+        _require_token(request)
+        if code not in DIMENSIONS_BY_CODE:
+            raise HTTPException(status_code=404, detail="unknown dimension")
+        session = session_factory()
+        try:
+            try:
+                apply_interview_step(
+                    session,
+                    code,
+                    payload.satisfaction,
+                    [g.model_dump() for g in payload.goals],
+                )
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {"code": code, "next": _next_step_code(session)}
+        finally:
+            session.close()
+
+    @app.post("/api/go-live")
+    def api_go_live(request: Request) -> dict[str, Any]:
+        _require_token(request)
+        session = session_factory()
+        try:
+            try:
+                go_live(session)
+            except PermissionError:
+                gate = coverage_gate(session)
+                raise HTTPException(status_code=409, detail={"failures": gate.failures}) from None
+            return {"mode": "live"}
         finally:
             session.close()
 

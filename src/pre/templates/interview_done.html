@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Interview complete{% endblock %}
+{% block body %}
+<h1>Interview complete</h1>
+<p>{{ done }}/{{ total }} Life Dimensions recorded.</p>
+{% if error %}<p class='flags'>{{ error }}</p>{% endif %}
+{% if passed %}
+<p>Coverage gate: PASS — the system may go live.</p>
+<form method='post' action='/interview/go-live'>
+<p><button type='submit'>Go live</button></p>
+</form>
+{% else %}
+<p>Coverage gate: not passed.</p>
+<ul>
+{% for failure in failures %}<li>{{ failure }}</li>{% endfor %}
+</ul>
+<form method='post' action='/interview/go-live'>
+<p><button type='submit'>Try go-live anyway</button></p>
+</form>
+{% endif %}
+<p><a href='/digest/daily'>Daily digest</a> · <a href='/'>overview</a></p>
+{% endblock %}
