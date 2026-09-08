@@ -41,6 +41,11 @@ A Personal Relevance Engine that maintains a complete structured Profile of the 
 27. As the user, I want a shadow-mode cold start — silent corpus collection, then shadow judging with spot-checks — before the first real Digest, so that the system earns trust before it claims my attention.
 28. As the user, I want urgent Watchlist notices (deprecation/security) surfaced during cold start labeled UNSCORED, so that a genuinely time-sensitive Change isn't withheld just because calibration isn't done.
 29. As the user, I want a Profile coverage check to gate go-live, so that the Digest doesn't launch against a half-built picture of me.
+30. As a nontechnical user, I want a guided interview in plain language, so that I can onboard without files or configuration.
+31. As the user, I want to connect Gmail and Calendar with an OAuth click and upload takeout files from the browser, so that no CLI is ever required.
+32. As the user, I want per-dimension threshold controls in settings, so that tuning never needs a command.
+33. As the user, I want to read the Digest and record Verdicts identically from the phone browser, an assistant chat, or the extension, so that the habit fits wherever I am.
+34. As a SaaS user, I want my Profile visible only to me, so that my joined life data never leaks across tenants.
 
 ## Implementation Decisions
 
@@ -55,6 +60,8 @@ A Personal Relevance Engine that maintains a complete structured Profile of the 
 - **Cold start**: ~4 weeks. Weeks 1–2: interview skeleton + Watchlist assembly + silent Firehose ingestion. Weeks 3–4: extraction populates the Profile; judge runs in shadow mode with spot-checks. Go-live gated on a Profile coverage check. Urgent Watchlist notices may surface during cold start labeled UNSCORED.
 - **Cost doctrine**: every judge call cost-metered; monthly cap with pre-invoice alert (mirrors the provider-cost metering in the user's existing systems).
 - **Proportionality doctrine**: one Postgres (+pgvector), Python workers, cron/APScheduler. No separate vector DB, no queue infrastructure, no microservices.
+- **Outlets** (per ADR-0004, order: web app → assistant plugin → SaaS → extension → mobile-Android): every Outlet reads Digests and records Verdicts through one tenant-scoped HTTP API; the engine keeps no outlet-specific logic.
+- **Tenancy** (per ADR-0005): the engine stays single-Profile; SaaS hosts many Tenants, one database each; per-tenant LLM caps and billing ride the existing meter.
 
 ## Testing Decisions
 
@@ -64,13 +71,15 @@ A Personal Relevance Engine that maintains a complete structured Profile of the 
   - **Judge seam**: the LLM judge sits behind an interface; tests substitute a scripted judge.
   - **Digest/verdict seam**: the dashboard/push-link API is the behavioral surface — end-to-end tests assert digest contents, ranking, and the calibration effects of Verdicts here.
 - Prior art: none in this workspace (greenfield); the user's radar system in `working-system-architecture-v4.md` is the doctrinal reference (calibration tables, provider health, cold-start discipline).
+- **Tenancy isolation**: tests prove tenant A can never read tenant B (separate databases; cross-tenant access fails closed) — the existential case keeps permanent regression coverage.
+- **Plugin conformance**: the MCP server is exercised through a fake MCP client asserting tool shapes for digest delivery and verdict capture; no live assistant account in tests.
 
 ## Out of Scope
 
 - Hardware/physical products (firmware updates, recalls, new models) — deferred to phase 2.
 - Urgency-routed real-time alerting as a primary mode — rejected in favor of Digests; UNSCORED urgent notices during cold start are the only exception.
 - Autonomous action-taking (auto-adopting, auto-purchasing) — the system's action loop ends at a logged human Verdict.
-- Multi-user support — the Profile model assumes exactly one user.
+- Single shared user pool — superseded by Tenancy above: one engine, one Profile per Tenant database (ADR-0005). True multi-human sharing of one Profile (family plans) remains out of scope.
 - Live connectors beyond calendar and email in v1.
 
 ## Further Notes
