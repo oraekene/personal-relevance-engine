@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}{{ kind }} digest{% endblock %}
+{% block body %}
+<h1>{{ kind }} digest</h1>
+{% if mode == "shadow" %}<p><i>[SHADOW MODE — nothing is delivered or marked read]</i></p>{% endif %}
+{% if not items %}<p>(nothing passed the thresholds)</p>{% endif %}
+{% for item in items %}
+<div class='item'>
+<span class='score'>{{ item.score }}/100</span>{% if item.unscored or item.stale %} <span class='flags'>[{{ 'UNSCORED' if item.unscored else '' }}{{ '/' if item.unscored and item.stale else '' }}{{ 'STALE PROFILE' if item.stale else '' }}]</span>{% endif %}
+<b>{{ item.entity_label }}</b>{% if item.dimension_code %} ({{ item.dimension_code }}){% endif %}{% if item.verdict %} <b>{{ '✅ ACTED' if item.verdict == 'act' else '🗑 dismissed' }}</b>{% endif %}<br>
+{{ item.reasoning }}
+<br>{% if item.verdict is none %}<a class='btn act' href='/item/{{ item.id }}/verdict/act'>Act</a><a class='btn dismiss' href='/item/{{ item.id }}/verdict/dismiss'>Dismiss</a>{% endif %}
+</div>
+{% endfor %}
+<p><a href='/digest/{{ other }}'>switch to {{ other }}</a> · <a href='/'>overview</a></p>
+{% endblock %}

@@ -119,6 +119,72 @@ def test_unknown_kind_404(client) -> None:
     assert client.get("/digest/hourly").status_code == 404
 
 
+def test_digest_page_shows_unscored_flag(client, session: Session) -> None:
+    item = _seed_and_assemble(session)
+    item.unscored = True
+    session.commit()
+    session.expire_all()
+
+    response = client.get(f"/digest/{item.digest_kind}")
+
+    assert response.status_code == 200
+    assert "[UNSCORED]" in response.text
+
+
+def test_digest_page_escapes_tool_names(client, session: Session) -> None:
+    from pre.change_corpus import FirehoseEntry, ingest_entries
+    from pre.digest import assemble_digest
+    from pre.intake import apply_intake_dict
+    from pre.judge import ScriptedJudge
+    from pre.models import Change, Tool
+    from pre.retrieval import index_all
+    from pre.scoring import judge_change
+
+    apply_intake_dict(
+        session,
+        {
+            "dimensions": [
+                {
+                    "code": "business",
+                    "goals": [
+                        {
+                            "title": "Use Evil heavily",
+                            "needs": [
+                                {
+                                    "title": "Evil reliability",
+                                    "activities": [
+                                        {
+                                            "title": "Work in Evil daily",
+                                            "tasks": [{"title": "Open Evil",
+                                                       "tools": ["<b>Evil</b>"]}],
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+    ingest_entries(
+        session,
+        [FirehoseEntry(product_name="<b>Evil</b>", title="<b>Evil</b> pricing change")],
+        "lane",
+    )
+    index_all(session)
+    change = session.query(Change).one()
+    tool = session.query(Tool).one()
+    judge_change(session, change.id, ScriptedJudge({("tool", tool.id): (90, "rely on it")}))
+    assert assemble_digest(session, "daily")
+
+    response = client.get("/digest/daily")
+
+    assert response.status_code == 200
+    assert "&lt;b&gt;Evil&lt;/b&gt;" in response.text
+    assert "<b>Evil</b>" not in response.text
+
+
 def test_push_link_shape() -> None:
     from pre.web import push_link
 
