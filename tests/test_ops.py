@@ -249,3 +249,37 @@ def test_retention_respects_env_override(
     session.commit()
 
     assert prune_old_changes(session) == 1
+
+
+def test_ops_dashboard_reports_verdict_history(session: Session) -> None:
+    from pre.models import VerdictLog
+
+    session.add_all(
+        [
+            VerdictLog(
+                digest_item_id=1,
+                change_id=1,
+                digest_kind="daily",
+                dimension_code="business",
+                verdict="act",
+                profile_version=1,
+                recorded_at=datetime(2025, 6, 1, tzinfo=UTC),
+            ),
+            VerdictLog(
+                digest_item_id=2,
+                change_id=2,
+                digest_kind="weekly",
+                dimension_code="family",
+                verdict="dismiss",
+                profile_version=1,
+                recorded_at=datetime(2026, 9, 1, tzinfo=UTC),
+            ),
+        ]
+    )
+    session.commit()
+
+    text = render_ops_dashboard(session)
+
+    assert "2 verdicts" in text
+    assert "2025-06-01" in text
+    assert "issue 17" in text

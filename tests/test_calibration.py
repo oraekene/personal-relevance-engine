@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy.orm import Session
@@ -10,7 +10,7 @@ from pre.change_corpus import FirehoseEntry, ingest_entries
 from pre.digest import assemble_digest
 from pre.intake import apply_intake_dict
 from pre.judge import ScriptedJudge
-from pre.models import Change, ThresholdCell, Tool
+from pre.models import Change, DigestItem, ThresholdCell, Tool
 from pre.retrieval import index_all
 from pre.scoring import judge_change
 from pre.verdicts import record_verdict
@@ -187,3 +187,46 @@ def test_render_shows_stale_label(session: Session, monkeypatch: pytest.MonkeyPa
     text = render_digest(session, "daily")
 
     assert "[STALE PROFILE]" in text
+
+
+def test_calibration_converges_over_large_aged_history(session: Session) -> None:
+    """Issue 17 proof for (a): a big history incl. year-old rows still trains.
+
+    Twelve real end-to-end dismissals plus     bulk backfill to 300 rows with ages
+    spread over 400 days; repeated calibration must converge the cell to its
+    ceiling with the history intact (nothing pruned, old rows still count).
+    """
+    from pre.models import VerdictLog
+
+    _seed(session)
+    _verdict_cycle(session, "dismiss", 12)
+
+    now = datetime.now(UTC)
+    first_item = session.query(DigestItem).order_by(DigestItem.id).first()
+    assert first_item is not None
+    bulk = [
+        VerdictLog(
+            digest_item_id=first_item.id,
+            change_id=first_item.change_id,
+            digest_kind="daily",
+            dimension_code="business",
+            verdict="dismiss",
+            profile_version=1,
+            channel="cli",
+            recorded_at=now - timedelta(days=i),
+        )
+        for i in range(1, 289)
+    ]
+    session.add_all(bulk)
+    session.commit()
+    assert session.query(VerdictLog).count() == 300
+
+    for _ in range(3):
+        calibrate_from_verdicts(session)
+
+    cell = session.query(ThresholdCell).filter_by(
+        digest_kind="daily", dimension_code="business"
+    ).one()
+    assert cell.min_score == 95  # ceiling reached: 80 -> 85 -> 90 -> 95
+    assert cell.tuning == "calibrated"
+    assert session.query(VerdictLog).count() == 300  # history intact

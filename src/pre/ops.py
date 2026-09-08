@@ -251,6 +251,15 @@ def render_ops_dashboard(session: Session) -> str:
     lines.append(
         f"CORPUS RETENTION: keep {retention_days()}d; {len(corpus)} Changes in corpus"
     )
+    verdicts = session.scalars(select(VerdictLog)).all()
+    if verdicts:
+        oldest = min(v.recorded_at for v in verdicts).date().isoformat()
+        lines.append(
+            f"VERDICT HISTORY: {len(verdicts)} verdicts, oldest {oldest} "
+            "(policy: keep all, issue 17)"
+        )
+    else:
+        lines.append("VERDICT HISTORY: (no verdicts yet)")
     last = last_backup_at(session)
     if last is None:
         lines.append("LAST BACKUP: (never — run `pre backup --file <dest>` via cron nightly)")
