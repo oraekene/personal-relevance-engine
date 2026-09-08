@@ -1,0 +1,3 @@
+# Database-per-user SaaS tenancy
+
+Each SaaS Tenant (one person, one Profile) gets its own database rather than sharing tables keyed by user id. The Profile joins financial, health, location, and comms data, so a cross-tenant leak is the existential failure mode; per-database isolation makes that failure structurally near-impossible rather than convention-dependent, and per-user LLM caps and billing fall out naturally (the engine already routes by database URL). Accepted consequence: connection management and migrations fan out per tenant, so operations cost more from day one than under a shared schema. Reopening this later means migrating every tenant's data into shared tables, so it is expensive to reverse.

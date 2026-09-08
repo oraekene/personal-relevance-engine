@@ -60,6 +60,14 @@ _Avoid_: contacts (too flat), social graph
 A curated broad source of Change announcements (changelog aggregators, launch platforms, app-store update feeds), ingested in bulk and filtered hard against the Profile.
 _Avoid_: stream, crawl
 
+**Tenant**:
+One SaaS account: a person, their Profile, and the data store holding it. Tenants never share data.
+_Avoid_: user (means the human), account (means login credentials)
+
+**Outlet**:
+One distribution channel through which a person reads Digests and records Verdicts: the web app, an assistant plugin, a Tenant surface in SaaS, the browser extension, or the mobile app. Ordered web-first; every Outlet reads from, and records into, one Profile.
+_Avoid_: platform (overloaded), app (means mobile to most readers), integration
+
 ## Scope decisions
 
 - v1 covers software only. Hardware/physical products (firmware, recalls, new models) are deferred to phase 2.
