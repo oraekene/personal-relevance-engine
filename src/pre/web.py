@@ -26,11 +26,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from pre.coldstart import coverage_gate, get_mode, go_live
-from pre.digest import ensure_matrix, mark_delivered
+from pre.digest import ensure_matrix, mark_delivered, set_cell
 from pre.ingest import IMPORTERS, import_file
 from pre.intake import apply_interview_step
 from pre.models import DigestItem, Goal, LifeDimension, Need, SourceSyncState
 from pre.ops import render_ops_dashboard
+from pre.settings import PRESET_ORDER, apply_preset, preset_of
 from pre.taxonomy import DIMENSIONS, DIMENSIONS_BY_CODE
 from pre.verdicts import VALID_VERDICTS, record_verdict
 
@@ -125,6 +126,31 @@ class InterviewGoalIn(BaseModel):
 class InterviewStepIn(BaseModel):
     satisfaction: int
     goals: list[InterviewGoalIn] = []
+
+
+class SettingsIn(BaseModel):
+    dimension_code: str
+    preset: str
+
+
+def _settings_rows(session: Session) -> list[dict[str, Any]]:
+    cells = ensure_matrix(session)
+    rows = []
+    for dim in DIMENSIONS:
+        daily = cells[("daily", dim.code)]
+        weekly = cells[("weekly", dim.code)]
+        tuning = "/".join(sorted({daily.tuning, weekly.tuning}))
+        rows.append(
+            {
+                "code": dim.code,
+                "name": dim.name,
+                "daily": daily.min_score,
+                "weekly": weekly.min_score,
+                "preset": preset_of(daily.min_score, weekly.min_score),
+                "tuning": tuning,
+            }
+        )
+    return rows
 
 
 def _interview_progress(session: Session) -> list[dict[str, Any]]:
@@ -465,6 +491,91 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             }
         finally:
             dest.unlink(missing_ok=True)
+            session.close()
+
+    @app.get("/settings")
+    def settings_page() -> Response:
+        session = session_factory()
+        try:
+            return Response(
+                _render(
+                    "settings.html",
+                    rows=_settings_rows(session),
+                    presets=list(PRESET_ORDER),
+                    error=None,
+                ),
+                media_type="text/html",
+            )
+        finally:
+            session.close()
+
+    @app.post("/settings")
+    async def settings_save(request: Request) -> Response:
+        form = await request.form()
+
+        def _failed(message: str) -> Response:
+            session = session_factory()
+            try:
+                return Response(
+                    _render(
+                        "settings.html",
+                        rows=_settings_rows(session),
+                        presets=list(PRESET_ORDER),
+                        error=message,
+                    ),
+                    status_code=400,
+                    media_type="text/html",
+                )
+            finally:
+                session.close()
+
+        session = session_factory()
+        try:
+            try:
+                for dim in DIMENSIONS:
+                    wanted = str(form.get(f"preset_{dim.code}", "") or "")
+                    if wanted:
+                        # A chosen preset wins over the number fields for its row.
+                        apply_preset(session, dim.code, wanted)
+                        continue
+                    for kind in ("daily", "weekly"):
+                        raw = form.get(f"cell_{kind}_{dim.code}", "")
+                        if raw in (None, ""):
+                            continue
+                        set_cell(session, kind, dim.code, int(str(raw)))
+            except ValueError as exc:
+                return _failed(str(exc))
+            return RedirectResponse("/settings", status_code=303)
+        finally:
+            session.close()
+
+    @app.get("/api/settings")
+    def api_settings(request: Request) -> dict[str, Any]:
+        _require_token(request)
+        session = session_factory()
+        try:
+            return {"rows": _settings_rows(session)}
+        finally:
+            session.close()
+
+    @app.post("/api/settings")
+    def api_settings_save(payload: SettingsIn, request: Request) -> dict[str, Any]:
+        _require_token(request)
+        if payload.dimension_code not in DIMENSIONS_BY_CODE:
+            raise HTTPException(status_code=404, detail="unknown dimension")
+        session = session_factory()
+        try:
+            try:
+                daily, weekly = apply_preset(session, payload.dimension_code, payload.preset)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {
+                "dimension_code": payload.dimension_code,
+                "preset": payload.preset,
+                "daily": daily,
+                "weekly": weekly,
+            }
+        finally:
             session.close()
 
     @app.get("/api/digest/{kind}")

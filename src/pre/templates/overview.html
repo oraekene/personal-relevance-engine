@@ -6,5 +6,6 @@
 <p><a href='/digest/weekly'>Weekly digest</a> ({{ 'has items' if weekly else 'empty' }})</p>
 <p><a href='/interview'>Interview</a> ({{ done_steps }}/{{ total_steps }} steps done)</p>
 <p><a href='/sources'>Sources</a> ({{ sources_connected }}/{{ sources_total }} connected)</p>
+<p><a href='/settings'>Settings</a></p>
 <p>mode: {{ state }} · gate: {{ 'PASS' if gate_passed else 'not passed' }}</p>
 {% endblock %}

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block body %}
+<h1>Settings</h1>
+<p class='muted'>How much reaches you, per area of life. Quiet means only near-certain matches; Exploratory welcomes long shots. Anything you set by hand wins over automatic tuning. Pick a preset per row, or leave it blank and tune the two numbers instead.</p>
+{% if error %}<p class='flags'>{{ error }}</p>{% endif %}
+<form method='post' action='/settings'>
+<table>
+<tr><th>Area</th><th>Preset</th><th>Daily ≥</th><th>Weekly ≥</th><th>Tuning</th></tr>
+{% for row in rows %}
+<tr><td>{{ row.name }}</td>
+<td><select name='preset_{{ row.code }}'>
+<option value=''>—</option>
+{% for preset in presets %}
+<option value='{{ preset }}'{% if row.preset == preset %} selected{% endif %}>{{ preset.title() }}</option>
+{% endfor %}
+</select>{% if not row.preset %} <span class='muted'>Custom</span>{% endif %}</td>
+<td><input type='number' name='cell_daily_{{ row.code }}' min='0' max='100' step='1' value='{{ row.daily }}'></td>
+<td><input type='number' name='cell_weekly_{{ row.code }}' min='0' max='100' step='1' value='{{ row.weekly }}'></td>
+<td class='muted'>{{ row.tuning }}</td></tr>
+{% endfor %}
+</table>
+<p><button type='submit'>Save settings</button></p>
+</form>
+<p><a href='/'>overview</a></p>
+{% endblock %}
