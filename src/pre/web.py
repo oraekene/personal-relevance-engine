@@ -38,6 +38,7 @@ from pre.google import (
 )
 from pre.ingest import IMPORTERS, import_file
 from pre.intake import apply_interview_step
+from pre.mcp_oauth import get_mcp_consent, set_mcp_consent
 from pre.models import DigestItem, Goal, LifeDimension, Need, OAuthToken, SourceSyncState
 from pre.ops import render_ops_dashboard
 from pre.settings import PRESET_ORDER, apply_preset, preset_of
@@ -534,12 +535,16 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
     def settings_page() -> Response:
         session = session_factory()
         try:
+            master, dims = get_mcp_consent(session)
             return Response(
                 _render(
                     "settings.html",
                     rows=_settings_rows(session),
                     presets=list(PRESET_ORDER),
                     error=None,
+                    consent_master=master,
+                    consent_dims=dims if dims is not None else {d.code for d in DIMENSIONS},
+                    dimensions=DIMENSIONS,
                 ),
                 media_type="text/html",
             )
@@ -569,12 +574,31 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
         finally:
             session.close()
 
+    @app.post("/settings/consent")
+    async def settings_consent_save(request: Request) -> Response:
+        form = await request.form()
+        master = bool(form.get("mcp_master"))
+        checked = {d.code for d in DIMENSIONS if form.get(f"dim_{d.code}")}
+        session = session_factory()
+        try:
+            set_mcp_consent(session, master, checked or None)
+            return RedirectResponse("/settings", status_code=303)
+        finally:
+            session.close()
+
     @app.get("/api/settings")
     def api_settings(request: Request) -> dict[str, Any]:
         _require_token(request)
         session = session_factory()
         try:
-            return {"rows": _settings_rows(session)}
+            master, dims = get_mcp_consent(session)
+            return {
+                "rows": _settings_rows(session),
+                "mcp_consent": {
+                    "master": master,
+                    "dimensions": sorted(dims) if dims is not None else None,
+                },
+            }
         finally:
             session.close()
 

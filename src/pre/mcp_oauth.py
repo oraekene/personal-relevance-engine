@@ -108,6 +108,18 @@ def set_mcp_consent(
     session.commit()
 
 
+def profile_query_scope(session: Session) -> set[str] | None:
+    """Life Dimension codes the assistant may answer from; None refuses (master off).
+
+    Unknown codes are filtered so stale flags can never widen access.
+    """
+    master, dims = get_mcp_consent(session)
+    if not master:
+        return None
+    allowed = {d.code for d in DIMENSIONS}
+    return allowed if dims is None else (set(dims) & allowed)
+
+
 def register_client(
     session: Session,
     redirect_uris: list[str],

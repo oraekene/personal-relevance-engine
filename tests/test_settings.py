@@ -112,3 +112,65 @@ def test_api_settings_rejects(client, monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setenv("PRE_API_TOKEN", "secret")
     assert client.get("/api/settings").status_code == 401
+
+
+# --- assistant-access consent (issue 24) ------------------------------------------
+
+
+def test_consent_defaults_off(client, session: Session) -> None:
+    from pre.mcp_oauth import profile_query_scope
+
+    assert profile_query_scope(session) is None
+
+    page = client.get("/settings")
+
+    assert "Assistant access" in page.text
+    assert "Allow assistant answers from my profile" in page.text
+
+
+def test_consent_post_persists_subset(client, session: Session) -> None:
+    from pre.mcp_oauth import get_mcp_consent, profile_query_scope
+
+    response = client.post(
+        "/settings/consent",
+        data={"mcp_master": "1", "dim_business": "1", "dim_family": "1"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    master, dims = get_mcp_consent(session)
+    assert master is True
+    assert dims == {"business", "family"}
+    assert profile_query_scope(session) == {"business", "family"}
+
+    page = client.get("/settings")
+    assert "value='1' checked> Allow assistant answers" in page.text
+
+
+def test_consent_master_off_refuses_everything(client, session: Session) -> None:
+    from pre.mcp_oauth import profile_query_scope
+
+    client.post("/settings/consent", data={"dim_business": "1"})
+
+    assert profile_query_scope(session) is None
+
+
+def test_consent_none_means_all_dimensions(session: Session) -> None:
+    from pre.mcp_oauth import profile_query_scope, set_mcp_consent
+
+    set_mcp_consent(session, True, None)
+    assert profile_query_scope(session) is not None
+    assert len(profile_query_scope(session) or set()) == 17
+
+    set_mcp_consent(session, True, {"business", "narnia"})
+    assert profile_query_scope(session) == {"business"}  # unknown codes filtered
+
+
+def test_api_settings_reports_consent(client, session: Session) -> None:
+    from pre.mcp_oauth import set_mcp_consent
+
+    set_mcp_consent(session, True, {"business"})
+
+    body = client.get("/api/settings").json()["mcp_consent"]
+
+    assert body == {"master": True, "dimensions": ["business"]}

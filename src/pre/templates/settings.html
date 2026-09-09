@@ -22,5 +22,14 @@
 </table>
 <p><button type='submit'>Save settings</button></p>
 </form>
+<h2>Assistant access</h2>
+<p class='muted'>Let a connected assistant answer questions from your profile. Off by default; unticked areas stay private. Applies on next assistant question.</p>
+<form method='post' action='/settings/consent'>
+<label><input type='checkbox' name='mcp_master' value='1'{% if consent_master %} checked{% endif %}> Allow assistant answers from my profile</label><br>
+{% for dim in dimensions %}
+<label><input type='checkbox' name='dim_{{ dim.code }}' value='1'{% if dim.code in consent_dims %} checked{% endif %}> {{ dim.name }}</label><br>
+{% endfor %}
+<p><button type='submit'>Save assistant access</button></p>
+</form>
 <p><a href='/'>overview</a></p>
 {% endblock %}
