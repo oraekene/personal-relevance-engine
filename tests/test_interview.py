@@ -88,6 +88,28 @@ def test_double_submit_adds_nothing(client, session: Session) -> None:
     assert session.query(Need).count() == 1
 
 
+def test_reapplying_same_doc_counts_honestly(session: Session) -> None:
+    from pre.intake import apply_intake_dict
+
+    doc = {
+        "dimensions": [
+            {
+                "code": "business",
+                "satisfaction": 6,
+                "goals": [{"title": "G", "needs": [{"title": "N"}]}],
+            }
+        ]
+    }
+
+    first = apply_intake_dict(session, doc)
+    second = apply_intake_dict(session, doc)
+
+    assert (first.goals, first.needs) == (1, 1)
+    assert (second.goals, second.needs) == (0, 0)
+    assert session.query(Goal).count() == 1
+    assert session.query(Need).count() == 1
+
+
 def test_done_page_shows_gate(client, session: Session) -> None:
     _complete_step(client, "physical_health")
 

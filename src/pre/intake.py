@@ -88,7 +88,9 @@ def _get_or_create_tool(session: Session, name: str) -> Tool:
     return tool
 
 
-def _apply_goal(session: Session, dimension: LifeDimension, data: dict[str, Any]) -> Goal:
+def _apply_goal(
+    session: Session, dimension: LifeDimension, data: dict[str, Any]
+) -> tuple[Goal, bool]:
     # Re-application is idempotent per goal title within a dimension: the web
     # interview resubmits steps (refresh, back-button, resume), and batch files
     # get re-run. The first write wins; later ones add nothing.
@@ -98,7 +100,7 @@ def _apply_goal(session: Session, dimension: LifeDimension, data: dict[str, Any]
         )
     )
     if existing is not None:
-        return existing
+        return existing, False
     goal = Goal(
         dimension_id=dimension.id,
         title=data["title"],
@@ -108,7 +110,7 @@ def _apply_goal(session: Session, dimension: LifeDimension, data: dict[str, Any]
     session.flush()
     for need_data in data.get("needs", []):
         _apply_need(session, goal, need_data)
-    return goal
+    return goal, True
 
 
 def _apply_need(session: Session, goal: Goal, data: dict[str, Any]) -> Need:
@@ -191,7 +193,9 @@ def apply_intake_dict(session: Session, data: dict[str, Any]) -> IntakeSummary:
                 dimension.update_satisfaction(int(satisfaction))
             summary.dimensions += 1
             for goal_data in dim_data.get("goals", []):
-                _apply_goal(session, dimension, goal_data)
+                _goal, created = _apply_goal(session, dimension, goal_data)
+                if not created:
+                    continue
                 summary.goals += 1
                 summary.needs += sum(len(g.get("needs", [])) for g in [goal_data])
                 for need_data in goal_data.get("needs", []):

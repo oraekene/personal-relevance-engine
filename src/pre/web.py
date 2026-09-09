@@ -50,6 +50,27 @@ def push_link(base_url: str, digest_item_id: int) -> str:
     return f"{base_url.rstrip('/')}/item/{digest_item_id}/verdict/%s"
 
 
+def _sources_error(session: Session, message: str, status: int) -> Response:
+    return Response(
+        _render("sources.html", **_sources_view(session, error=message)),
+        status_code=status,
+        media_type="text/html",
+    )
+
+
+def _settings_error(session: Session, message: str) -> Response:
+    return Response(
+        _render(
+            "settings.html",
+            rows=_settings_rows(session),
+            presets=list(PRESET_ORDER),
+            error=message,
+        ),
+        status_code=400,
+        media_type="text/html",
+    )
+
+
 class UploadTooLarge(ValueError):
     """An uploaded export exceeds the configured cap."""
 
@@ -146,7 +167,7 @@ class InterviewGoalIn(BaseModel):
 
 
 class InterviewStepIn(BaseModel):
-    satisfaction: int
+    satisfaction: int | None = None
     goals: list[InterviewGoalIn] = []
 
 
@@ -451,34 +472,24 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="unknown source kind")
         form = await request.form()
         upload = form.get("file")
-
-        def _failed(message: str, status: int) -> Response:
-            session = session_factory()
-            try:
-                return Response(
-                    _render("sources.html", **_sources_view(session, error=message)),
-                    status_code=status,
-                    media_type="text/html",
-                )
-            finally:
-                session.close()
-
-        if upload is None or not hasattr(upload, "read"):
-            return _failed("Choose a file to import.", 400)
-        try:
-            dest = await _save_upload(kind, upload)
-        except (ValueError, OSError) as exc:
-            code = 413 if isinstance(exc, UploadTooLarge) else 400
-            return _failed(str(exc), code)
         session = session_factory()
+        dest: Path | None = None
         try:
+            if upload is None or not hasattr(upload, "read"):
+                return _sources_error(session, "Choose a file to import.", 400)
+            try:
+                dest = await _save_upload(kind, upload)
+            except (ValueError, OSError) as exc:
+                code = 413 if isinstance(exc, UploadTooLarge) else 400
+                return _sources_error(session, str(exc), code)
             try:
                 import_file(session, kind, dest)
             except (ValueError, KeyError, OSError) as exc:
-                return _failed(f"Could not import that file: {exc}", 400)
+                return _sources_error(session, f"Could not import that file: {exc}", 400)
             return RedirectResponse("/sources", status_code=303)
         finally:
-            dest.unlink(missing_ok=True)
+            if dest is not None:
+                dest.unlink(missing_ok=True)
             session.close()
 
     @app.post("/api/sources/{kind}")
@@ -534,23 +545,6 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
     @app.post("/settings")
     async def settings_save(request: Request) -> Response:
         form = await request.form()
-
-        def _failed(message: str) -> Response:
-            session = session_factory()
-            try:
-                return Response(
-                    _render(
-                        "settings.html",
-                        rows=_settings_rows(session),
-                        presets=list(PRESET_ORDER),
-                        error=message,
-                    ),
-                    status_code=400,
-                    media_type="text/html",
-                )
-            finally:
-                session.close()
-
         session = session_factory()
         try:
             try:
@@ -566,7 +560,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
                             continue
                         set_cell(session, kind, dim.code, int(str(raw)))
             except ValueError as exc:
-                return _failed(str(exc))
+                return _settings_error(session, str(exc))
             return RedirectResponse("/settings", status_code=303)
         finally:
             session.close()
@@ -625,30 +619,23 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
     def sources_oauth_callback(request: Request) -> Response:
         params = request.query_params
 
-        def _failed(session: Session, message: str) -> Response:
-            return Response(
-                _render("sources.html", **_sources_view(session, error=message)),
-                status_code=400,
-                media_type="text/html",
-            )
-
         if params.get("error"):
             session = session_factory()
             try:
-                return _failed(session, "Google authorization was denied.")
+                return _sources_error(session, "Google authorization was denied.", 400)
             finally:
                 session.close()
         session = session_factory()
         try:
             code = params.get("code")
             if not code or not check_state(session, params.get("state")):
-                return _failed(session, "Invalid OAuth state — start over from Sources.")
+                return _sources_error(session, "Invalid OAuth state — start over from Sources.", 400)
             try:
                 payload = exchange_code(code)
                 email = fetch_account_email(str(payload["access_token"]))
                 store_tokens(session, payload, email)
             except (ValueError, KeyError, OSError, RuntimeError) as exc:
-                return _failed(session, f"Google connect failed: {exc}")
+                return _sources_error(session, f"Google connect failed: {exc}", 400)
             return RedirectResponse("/sources", status_code=303)
         finally:
             session.close()

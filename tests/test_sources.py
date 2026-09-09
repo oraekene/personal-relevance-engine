@@ -83,6 +83,22 @@ def test_upload_without_file_is_rejected(client) -> None:
     assert client.post("/sources/notes", data={}).status_code == 400
 
 
+def test_upload_cap_enforced_and_cleaned(
+    client, session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("PRE_MAX_UPLOAD_MB", "1")
+    big = tmp_path / "big.json"
+    big.write_bytes(b"0" * (2 * 1024 * 1024))
+    before = _leftovers()
+
+    response = client.post("/sources/notes", files={"file": ("big.json", big.read_bytes())})
+
+    assert response.status_code == 413
+    assert "exceed" in response.text
+    assert list_pending(session) == []
+    assert _leftovers() == before
+
+
 def test_api_upload_json(client, session: Session) -> None:
     response = client.post(
         "/api/sources/social",
