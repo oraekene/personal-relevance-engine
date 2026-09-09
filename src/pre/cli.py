@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -189,6 +190,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     add_db(provider_cmd)
     provider_cmd.add_argument("--result", required=True, choices=["ok", "fail"])
+
+    prov_tenant = sub.add_parser("provision-tenant", help="Register a tenant database (operator)")
+    prov_tenant.add_argument("--email", required=True)
+    prov_tenant.add_argument("--db-url", required=True)
+    prov_tenant.add_argument("--registry", default=None)
 
     sync = sub.add_parser(
         "sync-live", help="Pull connected Google services (OAuth) into the queue"
@@ -698,6 +704,26 @@ def _cmd_sync_live(args: argparse.Namespace) -> int:
         session.close()
 
 
+def _cmd_provision_tenant(args: argparse.Namespace) -> int:
+    from pre.db import make_session_factory
+    from pre.tenants import get_registry, register_tenant
+
+    registry_url = args.registry or os.environ.get("TENANT_REGISTRY_URL", "")
+    if not registry_url:
+        print("provision-tenant failed: set --registry or TENANT_REGISTRY_URL", file=sys.stderr)
+        return 1
+    session = make_session_factory(get_registry(registry_url))()
+    try:
+        tenant = register_tenant(session, args.email, args.db_url)
+        print(f"Tenant {tenant.email} registered (db {tenant.db_url}).")
+        return 0
+    except ValueError as exc:
+        print(f"provision-tenant failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        session.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     handlers = {
@@ -732,6 +758,7 @@ def main(argv: list[str] | None = None) -> int:
         "restore": _cmd_restore,
         "prune": _cmd_prune,
         "provider": _cmd_provider,
+        "provision-tenant": _cmd_provision_tenant,
         "sync-live": _cmd_sync_live,
     }
     return handlers[args.command](args)

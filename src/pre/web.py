@@ -13,18 +13,20 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import urllib.parse
 import uuid
 from pathlib import Path
 from typing import Any
 
 import anyio
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from pre.coldstart import coverage_gate, get_mode, go_live
+from pre.db import make_session_factory
 from pre.digest import ensure_matrix, item_json, list_digest_items, mark_delivered, set_cell
 from pre.google import (
     authorization_url,
@@ -43,6 +45,20 @@ from pre.ops import render_ops_dashboard
 from pre.render import render_template
 from pre.settings import PRESET_ORDER, apply_preset, preset_of
 from pre.taxonomy import DIMENSIONS, DIMENSIONS_BY_CODE, checked_dimension_codes
+from pre.tenants import (
+    SESSION_COOKIE,
+    SESSION_TTL_DAYS,
+    LoginRequired,
+    Tenant,
+    create_session_token,
+    destroy_session,
+    get_registry,
+    login_authorization_url,
+    login_exchange,
+    open_request_session,
+    provision_sqlite_tenant,
+    register_tenant,
+)
 from pre.verdicts import VALID_VERDICTS, record_verdict
 
 
@@ -258,10 +274,17 @@ def _digest_html(session: Session, kind: str) -> str:
     )
 
 
-def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
-    """App factory. Pass a session_factory or rely on the default DB URL."""
+def create_app(
+    session_factory: sessionmaker[Session] | None = None,
+    tenant_registry_url: str | None = None,
+) -> FastAPI:
+    """App factory. Pass a session_factory or rely on the default DB URL.
+
+    tenant_registry_url turns on multi-tenant mode (None reads
+    TENANT_REGISTRY_URL, empty means legacy single database).
+    """
     if session_factory is None:
-        from pre.db import DEFAULT_DB_URL, init_db, make_engine, make_session_factory
+        from pre.db import DEFAULT_DB_URL, init_db, make_engine
 
         engine = make_engine(os.environ.get("PRE_DB_URL", DEFAULT_DB_URL))
         init_db(engine)
@@ -277,9 +300,21 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
 
     app.mount("/mcp", create_mcp_server(session_factory).streamable_http_app(streamable_http_path="/"))
 
+    if tenant_registry_url is None:
+        tenant_registry_url = os.environ.get("TENANT_REGISTRY_URL", "") or None
+
+    def _open_tenant(request: Request) -> tuple[Session, Tenant | None]:
+        return open_request_session(request.cookies, session_factory, tenant_registry_url)
+
+    @app.exception_handler(LoginRequired)
+    def _login_required(request: Request, exc: LoginRequired) -> Response:
+        if request.url.path.startswith("/api/"):
+            return JSONResponse({"detail": "tenant login required"}, status_code=401)
+        return RedirectResponse("/auth/google/login", status_code=303)
+
     @app.get("/")
-    def overview() -> Response:
-        session = session_factory()
+    def overview(request: Request) -> Response:
+        session, tenant = _open_tenant(request)
         try:
             daily = session.scalar(
                 select(DigestItem).where(DigestItem.digest_kind == "daily")
@@ -303,6 +338,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
                     total_steps=len(steps),
                     sources_connected=connected,
                     sources_total=len(IMPORTERS),
+                    auth_email=tenant.email if tenant else None,
                 ),
                 media_type="text/html",
             )
@@ -310,20 +346,20 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             session.close()
 
     @app.get("/digest/{kind}")
-    def digest(kind: str) -> Response:
+    def digest(kind: str, request: Request) -> Response:
         if kind not in ("daily", "weekly"):
             raise HTTPException(status_code=404, detail="unknown digest kind")
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             return Response(_digest_html(session, kind), media_type="text/html")
         finally:
             session.close()
 
     @app.get("/item/{item_id}/verdict/{choice}")
-    def verdict(item_id: int, choice: str) -> Response:
+    def verdict(item_id: int, choice: str, request: Request) -> Response:
         if choice not in VALID_VERDICTS:
             raise HTTPException(status_code=400, detail="verdict must be act or dismiss")
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             record_verdict(session, item_id, choice, channel="web")
             item = session.get(DigestItem, item_id)
@@ -335,8 +371,8 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             session.close()
 
     @app.get("/interview")
-    def interview_index() -> Response:
-        session = session_factory()
+    def interview_index(request: Request) -> Response:
+        session, _tenant = _open_tenant(request)
         try:
             nxt = _next_step_code(session)
             target = f"/interview/{nxt}" if nxt else "/interview/done"
@@ -345,8 +381,8 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             session.close()
 
     @app.get("/interview/done")
-    def interview_done() -> Response:
-        session = session_factory()
+    def interview_done(request: Request) -> Response:
+        session, _tenant = _open_tenant(request)
         try:
             gate = coverage_gate(session)
             steps = _interview_progress(session)
@@ -366,8 +402,8 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             session.close()
 
     @app.post("/interview/go-live")
-    def interview_go_live() -> Response:
-        session = session_factory()
+    def interview_go_live(request: Request) -> Response:
+        session, _tenant = _open_tenant(request)
         try:
             try:
                 go_live(session)
@@ -392,8 +428,8 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             session.close()
 
     @app.get("/interview/{code}")
-    def interview_step(code: str) -> Response:
-        session = session_factory()
+    def interview_step(code: str, request: Request) -> Response:
+        session, _tenant = _open_tenant(request)
         try:
             view = _step_view(session, code)
             if view is None:
@@ -421,7 +457,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
                     "needs": [ln.strip() for ln in raw.splitlines() if ln.strip()],
                 }
             )
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             try:
                 apply_interview_step(session, code, satisfaction, goals)
@@ -438,8 +474,8 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             session.close()
 
     @app.get("/sources")
-    def sources() -> Response:
-        session = session_factory()
+    def sources(request: Request) -> Response:
+        session, _tenant = _open_tenant(request)
         try:
             return Response(
                 render_template("sources.html", **_sources_view(session)), media_type="text/html"
@@ -453,7 +489,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="unknown source kind")
         form = await request.form()
         upload = form.get("file")
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         dest: Path | None = None
         try:
             if upload is None or not hasattr(upload, "read"):
@@ -488,7 +524,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except OSError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             try:
                 result = import_file(session, kind, dest)
@@ -508,8 +544,8 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             session.close()
 
     @app.get("/settings")
-    def settings_page() -> Response:
-        session = session_factory()
+    def settings_page(request: Request) -> Response:
+        session, _tenant = _open_tenant(request)
         try:
             master, dims = get_mcp_consent(session)
             return Response(
@@ -530,7 +566,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
     @app.post("/settings")
     async def settings_save(request: Request) -> Response:
         form = await request.form()
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             try:
                 for dim in DIMENSIONS:
@@ -555,7 +591,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
         form = await request.form()
         master = bool(form.get("mcp_master"))
         checked = checked_dimension_codes(form)
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             set_mcp_consent(session, master, checked)
             return RedirectResponse("/settings", status_code=303)
@@ -565,7 +601,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
     @app.get("/api/settings")
     def api_settings(request: Request) -> dict[str, Any]:
         _require_token(request)
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             master, dims = get_mcp_consent(session)
             return {
@@ -583,7 +619,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
         _require_token(request)
         if payload.dimension_code not in DIMENSIONS_BY_CODE:
             raise HTTPException(status_code=404, detail="unknown dimension")
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             try:
                 daily, weekly = apply_preset(session, payload.dimension_code, payload.preset)
@@ -598,9 +634,73 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
         finally:
             session.close()
 
-    @app.get("/sources/connect/google")
-    def sources_connect_google() -> Response:
+    @app.get("/auth/google/login")
+    def auth_login() -> Response:
+        if not os.environ.get("PRE_GOOGLE_CLIENT_ID"):
+            return Response("Google login is not configured on this server.", status_code=400)
+        if tenant_registry_url is None:
+            return RedirectResponse("/", status_code=303)
         session = session_factory()
+        try:
+            state = new_state(session, "google_login_state")
+        finally:
+            session.close()
+        return RedirectResponse(login_authorization_url(state), status_code=303)
+
+    @app.get("/auth/google/callback")
+    def auth_callback(request: Request) -> Response:
+        params = request.query_params
+        if params.get("error"):
+            return Response("Google sign-in was denied.", status_code=400)
+        session = session_factory()
+        try:
+            if not check_state(session, params.get("state"), "google_login_state"):
+                return Response("Invalid or expired login — start over.", status_code=400)
+            try:
+                email = login_exchange(params.get("code") or "")
+            except (ValueError, OSError, RuntimeError) as exc:
+                return Response(f"Google sign-in failed: {exc}", status_code=400)
+            if tenant_registry_url is None:
+                return Response("Single-user server — no login needed.", status_code=400)
+            tenant_base = os.environ.get("TENANT_DBS_DIR", "")
+            if not tenant_base:
+                parsed = urllib.parse.urlparse(tenant_registry_url)
+                tenant_base = str(Path(parsed.path).parent / "tenants") if parsed.scheme == "sqlite" else "./tenants"
+            db_url = provision_sqlite_tenant(tenant_base, email)
+            reg_engine = get_registry(tenant_registry_url)
+            reg_factory = make_session_factory(reg_engine)
+            reg = reg_factory()
+            try:
+                tenant = register_tenant(reg, email, db_url)
+                token = create_session_token(reg, tenant.id)
+            finally:
+                reg.close()
+            response = RedirectResponse("/", status_code=303)
+            response.set_cookie(
+                SESSION_COOKIE, token, httponly=True, samesite="lax",
+                max_age=SESSION_TTL_DAYS * 86400, path="/",
+            )
+            return response
+        finally:
+            session.close()
+
+    @app.post("/auth/logout")
+    def auth_logout(request: Request) -> Response:
+        if tenant_registry_url is not None:
+            token = request.cookies.get(SESSION_COOKIE, "")
+            if token:
+                reg = make_session_factory(get_registry(tenant_registry_url))()
+                try:
+                    destroy_session(reg, token)
+                finally:
+                    reg.close()
+        response = RedirectResponse("/", status_code=303)
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return response
+
+    @app.get("/sources/connect/google")
+    def sources_connect_google(request: Request) -> Response:
+        session, _tenant = _open_tenant(request)
         try:
             if not is_configured():
                 return Response(
@@ -624,12 +724,12 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
         params = request.query_params
 
         if params.get("error"):
-            session = session_factory()
+            session, _tenant = _open_tenant(request)
             try:
                 return _sources_error(session, "Google authorization was denied.", 400)
             finally:
                 session.close()
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             code = params.get("code")
             if not code or not check_state(session, params.get("state")):
@@ -645,8 +745,8 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             session.close()
 
     @app.post("/sources/disconnect/google")
-    def sources_disconnect_google() -> Response:
-        session = session_factory()
+    def sources_disconnect_google(request: Request) -> Response:
+        session, _tenant = _open_tenant(request)
         try:
             row = session.scalar(select(OAuthToken).where(OAuthToken.service == "google"))
             if row is not None:
@@ -661,7 +761,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
         _require_token(request)
         if kind not in ("daily", "weekly"):
             raise HTTPException(status_code=404, detail="unknown digest kind")
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             return {
                 "kind": kind,
@@ -676,7 +776,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
         _require_token(request)
         if payload.choice not in VALID_VERDICTS:
             raise HTTPException(status_code=400, detail="verdict must be act or dismiss")
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             try:
                 log_row = record_verdict(session, payload.item_id, payload.choice, channel="api")
@@ -696,7 +796,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
     @app.get("/api/matrix")
     def api_matrix(request: Request) -> dict[str, Any]:
         _require_token(request)
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             cells = ensure_matrix(session)
             return {
@@ -718,7 +818,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
     @app.get("/api/ops")
     def api_ops(request: Request) -> dict[str, str]:
         _require_token(request)
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             return {"dashboard": render_ops_dashboard(session)}
         finally:
@@ -727,7 +827,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
     @app.get("/api/interview")
     def api_interview(request: Request) -> dict[str, Any]:
         _require_token(request)
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             steps = _interview_progress(session)
             gate = coverage_gate(session)
@@ -756,7 +856,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
         _require_token(request)
         if code not in DIMENSIONS_BY_CODE:
             raise HTTPException(status_code=404, detail="unknown dimension")
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             try:
                 apply_interview_step(
@@ -774,7 +874,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
     @app.post("/api/go-live")
     def api_go_live(request: Request) -> dict[str, Any]:
         _require_token(request)
-        session = session_factory()
+        session, _tenant = _open_tenant(request)
         try:
             try:
                 go_live(session)

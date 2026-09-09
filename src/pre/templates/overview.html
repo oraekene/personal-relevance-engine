@@ -7,5 +7,6 @@
 <p><a href='/interview'>Interview</a> ({{ done_steps }}/{{ total_steps }} steps done)</p>
 <p><a href='/sources'>Sources</a> ({{ sources_connected }}/{{ sources_total }} connected)</p>
 <p><a href='/settings'>Settings</a></p>
+{% if auth_email %}<p>Signed in as {{ auth_email }} · <form method='post' action='/auth/logout' style='display:inline'><button type='submit'>Sign out</button></form></p>{% endif %}
 <p>mode: {{ state }} · gate: {{ 'PASS' if gate_passed else 'not passed' }}</p>
 {% endblock %}

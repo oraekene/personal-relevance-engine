@@ -10,7 +10,7 @@ from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from pre.models import Base
+from pre.models import Base, RegistryBase
 
 DEFAULT_DB_URL = "sqlite:///pre.db"
 
@@ -30,6 +30,10 @@ def make_engine(url: str = DEFAULT_DB_URL) -> Engine:
 
 def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
+
+
+def init_registry(engine: Engine) -> None:
+    RegistryBase.metadata.create_all(engine)
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:

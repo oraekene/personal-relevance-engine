@@ -484,6 +484,40 @@ class SystemFlag(Base):
     set_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class RegistryBase(DeclarativeBase):
+    """Separate metadata for the tenancy control plane (issue 25).
+
+    Tenant databases carry the full Profile schema (Base); the registry holds
+    only identity, pointers, and sessions — never Profile data.
+    """
+
+
+class Tenant(RegistryBase):
+    """One SaaS tenant: identity email plus their database URL."""
+
+    __tablename__ = "tenants"
+    __table_args__ = (UniqueConstraint("email"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(256))
+    db_url: Mapped[str] = mapped_column(String(1024))
+    cap_override_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class TenantSession(RegistryBase):
+    """Opaque browser sessions: token hashes with expiry. Revoke by deleting."""
+
+    __tablename__ = "tenant_sessions"
+    __table_args__ = (UniqueConstraint("token_hash"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
+    token_hash: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 def provenance_of(obj: Any) -> dict[str, Any]:
     """Read an assertion's provenance as a plain dict."""
     return {
