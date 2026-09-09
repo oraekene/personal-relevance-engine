@@ -189,6 +189,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     add_db(provider_cmd)
     provider_cmd.add_argument("--result", required=True, choices=["ok", "fail"])
+
+    sync = sub.add_parser(
+        "sync-live", help="Pull connected Google services (OAuth) into the queue"
+    )
+    add_db(sync)
+    sync.add_argument("--kind", choices=["calendar", "email"], default=None,
+                      help="one service (default: all connected)")
     return parser
 
 
@@ -670,6 +677,27 @@ def _cmd_provider(args: argparse.Namespace) -> int:
         session.close()
 
 
+def _cmd_sync_live(args: argparse.Namespace) -> int:
+    from pre.google import sync_live_service
+
+    session = _open_session(args.db)
+    try:
+        kinds = [args.kind] if args.kind else ["calendar", "email"]
+        for kind in kinds:
+            summary = sync_live_service(session, kind)
+            print(
+                f"Synced {kind}: {summary['documents']} documents, "
+                f"{summary['proposals_new']} new proposals "
+                f"({summary['auto_accepted']} auto-accepted)."
+            )
+        return 0
+    except (RuntimeError, ValueError) as exc:
+        print(f"sync-live failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        session.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     handlers = {
@@ -704,6 +732,7 @@ def main(argv: list[str] | None = None) -> int:
         "restore": _cmd_restore,
         "prune": _cmd_prune,
         "provider": _cmd_provider,
+        "sync-live": _cmd_sync_live,
     }
     return handlers[args.command](args)
 

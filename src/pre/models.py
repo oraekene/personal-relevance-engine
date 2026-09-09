@@ -302,6 +302,27 @@ class SourceSyncState(Base):
     records_seen: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class OAuthToken(Base):
+    """One connected OAuth account per service (v1: Google only).
+
+    Secrets rest Fernet-encrypted (never plaintext, never logged); the master
+    key comes from PRE_TOKEN_KEY. One row per service in v1.
+    """
+
+    __tablename__ = "oauth_tokens"
+    __table_args__ = (UniqueConstraint("service"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    service: Mapped[str] = mapped_column(String(32))  # e.g. 'google'
+    account_email: Mapped[str] = mapped_column(String(256), default="")
+    access_token_enc: Mapped[str] = mapped_column(String(2048), default="")
+    refresh_token_enc: Mapped[str] = mapped_column(String(2048), default="")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class LLMCallLog(Base):
     """Cost meter: one row per LLM API call (ticket 04 doctrine: metered and capped)."""
 

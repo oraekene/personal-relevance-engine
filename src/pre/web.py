@@ -27,9 +27,18 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from pre.coldstart import coverage_gate, get_mode, go_live
 from pre.digest import ensure_matrix, mark_delivered, set_cell
+from pre.google import (
+    authorization_url,
+    check_state,
+    exchange_code,
+    fetch_account_email,
+    is_configured,
+    new_state,
+    store_tokens,
+)
 from pre.ingest import IMPORTERS, import_file
 from pre.intake import apply_interview_step
-from pre.models import DigestItem, Goal, LifeDimension, Need, SourceSyncState
+from pre.models import DigestItem, Goal, LifeDimension, Need, OAuthToken, SourceSyncState
 from pre.ops import render_ops_dashboard
 from pre.settings import PRESET_ORDER, apply_preset, preset_of
 from pre.taxonomy import DIMENSIONS, DIMENSIONS_BY_CODE
@@ -97,7 +106,20 @@ def _sources_view(session: Session, error: str | None = None) -> dict[str, Any]:
                 "records": records.get(importer.tier, 0),
             }
         )
-    return {"rows": rows, "error": error}
+    accounts = [
+        {
+            "service": row.service,
+            "email": row.account_email,
+            "expires": row.expires_at.date().isoformat() if row.expires_at else None,
+        }
+        for row in session.scalars(select(OAuthToken)).all()
+    ]
+    return {
+        "rows": rows,
+        "error": error,
+        "google_configured": is_configured(),
+        "accounts": accounts,
+    }
 
 
 def _require_token(request: Request) -> None:
@@ -575,6 +597,71 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
                 "daily": daily,
                 "weekly": weekly,
             }
+        finally:
+            session.close()
+
+    @app.get("/sources/connect/google")
+    def sources_connect_google() -> Response:
+        session = session_factory()
+        try:
+            if not is_configured():
+                return Response(
+                    _render(
+                        "sources.html",
+                        **_sources_view(
+                            session,
+                            error="Google OAuth is not configured "
+                            "(set PRE_GOOGLE_CLIENT_ID and PRE_GOOGLE_CLIENT_SECRET).",
+                        ),
+                    ),
+                    status_code=400,
+                    media_type="text/html",
+                )
+            return RedirectResponse(authorization_url(new_state(session)), status_code=303)
+        finally:
+            session.close()
+
+    @app.get("/sources/oauth/google/callback")
+    def sources_oauth_callback(request: Request) -> Response:
+        params = request.query_params
+
+        def _failed(session: Session, message: str) -> Response:
+            return Response(
+                _render("sources.html", **_sources_view(session, error=message)),
+                status_code=400,
+                media_type="text/html",
+            )
+
+        if params.get("error"):
+            session = session_factory()
+            try:
+                return _failed(session, "Google authorization was denied.")
+            finally:
+                session.close()
+        session = session_factory()
+        try:
+            code = params.get("code")
+            if not code or not check_state(session, params.get("state")):
+                return _failed(session, "Invalid OAuth state — start over from Sources.")
+            try:
+                payload = exchange_code(code)
+                email = fetch_account_email(str(payload["access_token"]))
+                store_tokens(session, payload, email)
+            except (ValueError, KeyError, OSError, RuntimeError) as exc:
+                return _failed(session, f"Google connect failed: {exc}")
+            return RedirectResponse("/sources", status_code=303)
+        finally:
+            session.close()
+
+    @app.post("/sources/disconnect/google")
+    def sources_disconnect_google() -> Response:
+        session = session_factory()
+        try:
+            row = session.scalar(select(OAuthToken).where(OAuthToken.service == "google"))
+            if row is not None:
+                session.delete(row)
+                session.commit()
+            return RedirectResponse("/sources", status_code=303)
         finally:
             session.close()
 

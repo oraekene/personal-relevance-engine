@@ -4,6 +4,22 @@
 <h1>Sources</h1>
 <p class='muted'>Upload an export file and it joins the confirmation queue — full history on first connect, deltas after.</p>
 {% if error %}<p class='flags'>{{ error }}</p>{% endif %}
+<h2>Google account</h2>
+{% if accounts %}
+<table>
+<tr><th>Service</th><th>Account</th><th>Token expires</th><th></th></tr>
+{% for account in accounts %}
+<tr><td>{{ account.service }}</td><td>{{ account.email }}</td>
+<td>{{ account.expires or 'unknown' }}</td>
+<td><form method='post' action='/sources/disconnect/google'>
+<button type='submit'>Disconnect</button></form></td></tr>
+{% endfor %}
+</table>
+{% elif google_configured %}
+<p><a class='btn act' href='/sources/connect/google'>Connect Google account</a></p>
+{% else %}
+<p class='muted'>Google OAuth is not configured (set PRE_GOOGLE_CLIENT_ID and PRE_GOOGLE_CLIENT_SECRET).</p>
+{% endif %}
 <table>
 <tr><th>Source</th><th>Tier</th><th>Last sync</th><th>Records seen</th><th>Upload export</th></tr>
 {% for row in rows %}
