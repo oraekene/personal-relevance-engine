@@ -296,6 +296,10 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
 
     app = FastAPI(title="Personal Relevance Engine", docs_url=None, redoc_url=None)
 
+    from pre.mcp_oauth import register_oauth_routes
+
+    register_oauth_routes(app, session_factory)
+
     @app.get("/")
     def overview() -> Response:
         session = session_factory()

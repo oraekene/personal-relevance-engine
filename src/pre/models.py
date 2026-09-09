@@ -323,6 +323,52 @@ class OAuthToken(Base):
     )
 
 
+class MCPOAuthClient(Base):
+    """A dynamically registered MCP client (RFC 7591). Secrets stored hashed."""
+
+    __tablename__ = "mcp_oauth_clients"
+    __table_args__ = (UniqueConstraint("client_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(64))
+    client_secret_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    redirect_uris_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    client_name: Mapped[str] = mapped_column(String(256), default="")
+    scopes_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MCPAuthCode(Base):
+    """Single-use authorization codes (10 minutes, PKCE-bound)."""
+
+    __tablename__ = "mcp_auth_codes"
+    __table_args__ = (UniqueConstraint("code_hash"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code_hash: Mapped[str] = mapped_column(String(64))
+    client_id: Mapped[str] = mapped_column(String(64))
+    redirect_uri: Mapped[str] = mapped_column(String(512))
+    scopes_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    code_challenge: Mapped[str] = mapped_column(String(128))
+    used: Mapped[bool] = mapped_column(default=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class MCPToken(Base):
+    """Issued token pairs. Only hashes rest here; plaintext exists in transit only."""
+
+    __tablename__ = "mcp_tokens"
+    __table_args__ = (UniqueConstraint("client_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(64))
+    access_hash: Mapped[str] = mapped_column(String(64))
+    refresh_hash: Mapped[str] = mapped_column(String(64))
+    scopes_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    access_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    refresh_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class LLMCallLog(Base):
     """Cost meter: one row per LLM API call (ticket 04 doctrine: metered and capped)."""
 

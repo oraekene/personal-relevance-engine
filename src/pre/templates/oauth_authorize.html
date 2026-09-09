@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Authorize assistant access{% endblock %}
+{% block body %}
+<h1>Authorize {{ client_name }}</h1>
+<p class='muted'>An assistant wants to connect with these permissions:</p>
+<ul>
+{% for scope in scopes %}<li><b>{{ scope }}</b> — {{ scope_descriptions[scope] }}</li>{% endfor %}
+</ul>
+{% if error %}<p class='flags'>{{ error }}</p>{% endif %}
+{% if needs_profile %}
+<p class='flags'>Includes answers from your profile. Tick the box to allow it — unticked means digest and verdicts only.</p>
+{% endif %}
+<form method='post' action='/oauth/authorize'>
+<input type='hidden' name='client_id' value='{{ client_id }}'>
+<input type='hidden' name='redirect_uri' value='{{ redirect_uri }}'>
+<input type='hidden' name='scope' value='{{ scope_text }}'>
+<input type='hidden' name='state' value='{{ state }}'>
+<input type='hidden' name='code_challenge' value='{{ code_challenge }}'>
+{% if needs_profile %}
+<label><input type='checkbox' name='allow_profile' value='1'> Allow assistant answers from my profile</label>
+<h2>Areas the assistant may use</h2>
+<p class='muted'>Untick areas to exclude them. Unticked everything still allows digest and verdicts.</p>
+{% for dim in dimensions %}
+<label><input type='checkbox' name='dim_{{ dim.code }}' value='1' checked> {{ dim.name }}</label><br>
+{% endfor %}
+{% endif %}
+<h2>Operator approval</h2>
+<p class='muted'>Paste this server's API token to prove it is you approving.</p>
+<label>API token: <input type='password' name='api_token' required></label>
+<p><button name='decision' value='approve' type='submit'>Approve</button>
+<button name='decision' value='deny' type='submit'>Deny</button></p>
+</form>
+{% endblock %}
