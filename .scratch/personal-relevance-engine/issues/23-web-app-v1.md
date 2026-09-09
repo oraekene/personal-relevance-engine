@@ -4,7 +4,14 @@
 
 **Blocked by:** 06 (digest/verdict surface exists); 13 (coverage gate exists).
 
-**Status:** ready-for-agent
+**Status:** resolved
+
+## Comments
+
+- Implemented in commits 398edd3 (1: JSON API + token gate) → 4c07939 (2: Jinja2 + autoescape) → babba95 (3: wizard) → 3ed26cc (4: uploads) → 9f9fa21 (5: presets + grid) → 1361f08 (6: OAuth vault + fetchers + sync-live).
+- Review findings, all closed same turn: goal re-application now returns created-vs-reused so summary counts stay honest (plus a recount test); interview JSON missing-satisfaction unified to 400; the three nested error-page closures collapsed into two module helpers using the already-open session (no more double sessions on failure paths); new upload-cap test (413 + tmp cleanup); Gmail 500-recent cap and sync-live partial-failure semantics documented as known limits below.
+- Known limits: Gmail backfill caps at 500 recent messages (ids paginate fully; deltas exact) — partial vs the full-history doctrine; `sync-live` commits per service, so a second-service failure leaves the first committed (cron retries nightly); phone-browser verified means responsive markup plus TestClient asserts — on-device check rides with deployment.
+- Verification: 58 new route tests across test_api/web/interview/sources/settings/google; full suite 235 passing, mypy strict, ruff clean.
 
 ## Commits
 
