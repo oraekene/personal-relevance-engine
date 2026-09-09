@@ -11,9 +11,13 @@ Run: `uvicorn pre.web:create_app --factory --host 0.0.0.0 --port 8787`
 from __future__ import annotations
 
 import os
+import re
+import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
+import anyio
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from jinja2 import Environment, FileSystemLoader
@@ -23,8 +27,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from pre.coldstart import coverage_gate, get_mode, go_live
 from pre.digest import ensure_matrix, mark_delivered
+from pre.ingest import IMPORTERS, import_file
 from pre.intake import apply_interview_step
-from pre.models import DigestItem, Goal, LifeDimension, Need
+from pre.models import DigestItem, Goal, LifeDimension, Need, SourceSyncState
 from pre.ops import render_ops_dashboard
 from pre.taxonomy import DIMENSIONS, DIMENSIONS_BY_CODE
 from pre.verdicts import VALID_VERDICTS, record_verdict
@@ -33,6 +38,65 @@ from pre.verdicts import VALID_VERDICTS, record_verdict
 def push_link(base_url: str, digest_item_id: int) -> str:
     """The URL a push channel (email/Telegram) sends the user to."""
     return f"{base_url.rstrip('/')}/item/{digest_item_id}/verdict/%s"
+
+
+class UploadTooLarge(ValueError):
+    """An uploaded export exceeds the configured cap."""
+
+
+def _max_upload_bytes() -> int:
+    raw = os.environ.get("PRE_MAX_UPLOAD_MB", "")
+    try:
+        mb = int(raw) if raw else 512
+    except ValueError:
+        mb = 512
+    return max(1, mb) * 1024 * 1024
+
+
+async def _save_upload(kind: str, upload: Any) -> Path:
+    """Stream an upload to a temp file named after the original (sanitized)."""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(getattr(upload, "filename", "") or "upload"))
+    dest = Path(tempfile.gettempdir()) / f"pre-upload-{uuid.uuid4().hex}-{safe[-64:]}"
+    cap = _max_upload_bytes()
+    written = 0
+    too_big = False
+    async with await anyio.open_file(dest, "wb") as fh:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > cap:
+                too_big = True
+                break
+            await fh.write(chunk)
+    if too_big:
+        dest.unlink(missing_ok=True)
+        raise UploadTooLarge(f"file exceeds the {cap // (1024 * 1024)} MB upload cap")
+    return dest
+
+
+def _sources_view(session: Session, error: str | None = None) -> dict[str, Any]:
+    states = session.scalars(select(SourceSyncState)).all()
+    latest: dict[str, Any] = {}
+    records: dict[str, int] = {}
+    for st in states:
+        prev = latest.get(st.tier)
+        if prev is None or (st.last_sync_at is not None and st.last_sync_at > prev):
+            latest[st.tier] = st.last_sync_at
+        records[st.tier] = records.get(st.tier, 0) + (st.records_seen or 0)
+    rows = []
+    for kind, importer in IMPORTERS.items():
+        synced = latest.get(importer.tier)
+        rows.append(
+            {
+                "kind": kind,
+                "tier": importer.tier,
+                "last_sync": synced.date().isoformat() if synced is not None else None,
+                "records": records.get(importer.tier, 0),
+            }
+        )
+    return {"rows": rows, "error": error}
 
 
 def _require_token(request: Request) -> None:
@@ -176,6 +240,8 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             gate = coverage_gate(session)
             state = get_mode(session)
             steps = _interview_progress(session)
+            tiers = {s.tier for s in session.scalars(select(SourceSyncState)).all()}
+            connected = sum(1 for _k, imp in IMPORTERS.items() if imp.tier in tiers)
             return Response(
                 _render(
                     "overview.html",
@@ -185,6 +251,8 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
                     gate_passed=gate.passed,
                     done_steps=sum(1 for s in steps if s["done"]),
                     total_steps=len(steps),
+                    sources_connected=connected,
+                    sources_total=len(IMPORTERS),
                 ),
                 media_type="text/html",
             )
@@ -317,6 +385,86 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
                 )
             return RedirectResponse("/interview", status_code=303)
         finally:
+            session.close()
+
+    @app.get("/sources")
+    def sources() -> Response:
+        session = session_factory()
+        try:
+            return Response(
+                _render("sources.html", **_sources_view(session)), media_type="text/html"
+            )
+        finally:
+            session.close()
+
+    @app.post("/sources/{kind}")
+    async def sources_upload(kind: str, request: Request) -> Response:
+        if kind not in IMPORTERS:
+            raise HTTPException(status_code=404, detail="unknown source kind")
+        form = await request.form()
+        upload = form.get("file")
+
+        def _failed(message: str, status: int) -> Response:
+            session = session_factory()
+            try:
+                return Response(
+                    _render("sources.html", **_sources_view(session, error=message)),
+                    status_code=status,
+                    media_type="text/html",
+                )
+            finally:
+                session.close()
+
+        if upload is None or not hasattr(upload, "read"):
+            return _failed("Choose a file to import.", 400)
+        try:
+            dest = await _save_upload(kind, upload)
+        except (ValueError, OSError) as exc:
+            code = 413 if isinstance(exc, UploadTooLarge) else 400
+            return _failed(str(exc), code)
+        session = session_factory()
+        try:
+            try:
+                import_file(session, kind, dest)
+            except (ValueError, KeyError, OSError) as exc:
+                return _failed(f"Could not import that file: {exc}", 400)
+            return RedirectResponse("/sources", status_code=303)
+        finally:
+            dest.unlink(missing_ok=True)
+            session.close()
+
+    @app.post("/api/sources/{kind}")
+    async def api_sources_upload(kind: str, request: Request) -> dict[str, Any]:
+        _require_token(request)
+        if kind not in IMPORTERS:
+            raise HTTPException(status_code=404, detail="unknown source kind")
+        form = await request.form()
+        upload = form.get("file")
+        if upload is None or not hasattr(upload, "read"):
+            raise HTTPException(status_code=400, detail="multipart field 'file' is required")
+        try:
+            dest = await _save_upload(kind, upload)
+        except UploadTooLarge as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        session = session_factory()
+        try:
+            try:
+                result = import_file(session, kind, dest)
+            except (ValueError, KeyError, OSError) as exc:
+                raise HTTPException(status_code=400, detail=f"Could not import: {exc}") from exc
+            return {
+                "kind": kind,
+                "tier": result.tier,
+                "first_connect": result.first_connect,
+                "proposals_new": result.proposals_new,
+                "proposals_strengthened": result.proposals_strengthened,
+                "skipped_known": result.skipped_known,
+                "auto_accepted": result.auto_accepted,
+            }
+        finally:
+            dest.unlink(missing_ok=True)
             session.close()
 
     @app.get("/api/digest/{kind}")

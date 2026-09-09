@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Sources{% endblock %}
+{% block body %}
+<h1>Sources</h1>
+<p class='muted'>Upload an export file and it joins the confirmation queue — full history on first connect, deltas after.</p>
+{% if error %}<p class='flags'>{{ error }}</p>{% endif %}
+<table>
+<tr><th>Source</th><th>Tier</th><th>Last sync</th><th>Records seen</th><th>Upload export</th></tr>
+{% for row in rows %}
+<tr><td>{{ row.kind }}</td><td>{{ row.tier }}</td>
+<td>{{ row.last_sync or 'never' }}</td><td>{{ row.records }}</td>
+<td><form method='post' action='/sources/{{ row.kind }}' enctype='multipart/form-data'>
+<input type='file' name='file' required> <button type='submit'>Import</button></form></td></tr>
+{% endfor %}
+</table>
+<p><a href='/'>overview</a></p>
+{% endblock %}
