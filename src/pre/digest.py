@@ -260,6 +260,8 @@ __all__ = [
     "DIGEST_LIMITS",
     "assemble_digest",
     "ensure_matrix",
+    "item_json",
+    "list_digest_items",
     "mark_delivered",
     "render_digest",
     "render_matrix",

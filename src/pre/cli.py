@@ -602,7 +602,7 @@ def _cmd_verdicts(args: argparse.Namespace) -> int:
 
 def _cmd_serve(args: argparse.Namespace) -> int:
     try:
-        import uvicorn  # type: ignore[import-not-found]
+        import uvicorn
 
         from pre.web import create_app
     except ImportError as exc:  # pragma: no cover - depends on [serve] extra

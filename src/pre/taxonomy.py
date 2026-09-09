@@ -10,6 +10,7 @@ Sub-dimensions are the interview coverage scaffold, not hard schema.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -163,6 +164,15 @@ DIMENSIONS: tuple[Dimension, ...] = (
 )
 
 DIMENSIONS_BY_CODE: dict[str, Dimension] = {d.code: d for d in DIMENSIONS}
+
+
+def checked_dimension_codes(form: Any) -> set[str]:
+    """Dimension codes checked in dim_-prefixed form fields (unknown codes dropped)."""
+    return {
+        str(key)[4:]
+        for key in form
+        if str(key).startswith("dim_") and form.get(key) and str(key)[4:] in DIMENSIONS_BY_CODE
+    }
 
 HORIZONS = ("immediate", "longterm")
 CADENCES = ("daily", "weekly", "monthly", "long-cycle")

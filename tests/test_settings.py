@@ -155,15 +155,28 @@ def test_consent_master_off_refuses_everything(client, session: Session) -> None
     assert profile_query_scope(session) is None
 
 
-def test_consent_none_means_all_dimensions(session: Session) -> None:
-    from pre.mcp_oauth import profile_query_scope, set_mcp_consent
+def test_consent_empty_means_no_dimensions(session: Session) -> None:
+    from pre.mcp_oauth import get_mcp_consent, profile_query_scope, set_mcp_consent
 
-    set_mcp_consent(session, True, None)
-    assert profile_query_scope(session) is not None
-    assert len(profile_query_scope(session) or set()) == 17
+    set_mcp_consent(session, True, set())
+    assert get_mcp_consent(session) == (True, set())
+    assert profile_query_scope(session) == set()
 
     set_mcp_consent(session, True, {"business", "narnia"})
     assert profile_query_scope(session) == {"business"}  # unknown codes filtered
+
+
+def test_consent_missing_flag_means_all_dimensions(session: Session) -> None:
+    """Legacy rows (master set before dimensions existed) still read as all."""
+    from pre.mcp_oauth import MCP_CONSENT_MASTER, get_mcp_consent, profile_query_scope
+    from pre.models import SystemFlag
+
+    session.add(SystemFlag(key=MCP_CONSENT_MASTER, value="1"))
+    session.commit()
+
+    assert get_mcp_consent(session) == (True, None)
+    assert profile_query_scope(session) is not None
+    assert len(profile_query_scope(session) or set()) == 17
 
 
 def test_api_settings_reports_consent(client, session: Session) -> None:

@@ -121,21 +121,21 @@ def authorization_url(state: str) -> str:
     return f"{GOOGLE_AUTH_URL}?{params}"
 
 
-def new_state(session: Session) -> str:
-    """Mint a CSRF nonce for the OAuth round-trip (single-use, checked on return)."""
+def new_state(session: Session, key: str = STATE_KEY) -> str:
+    """Mint a CSRF nonce for an OAuth round-trip (single-use, checked on return)."""
     token = secrets.token_urlsafe(24)
-    flag = session.scalar(select(SystemFlag).where(SystemFlag.key == STATE_KEY))
+    flag = session.scalar(select(SystemFlag).where(SystemFlag.key == key))
     if flag is None:
-        session.add(SystemFlag(key=STATE_KEY, value=token))
+        session.add(SystemFlag(key=key, value=token))
     else:
         flag.value = token
     session.commit()
     return token
 
 
-def check_state(session: Session, state: str | None) -> bool:
+def check_state(session: Session, state: str | None, key: str = STATE_KEY) -> bool:
     """Single-use CSRF check: compares then burns the nonce either way."""
-    flag = session.scalar(select(SystemFlag).where(SystemFlag.key == STATE_KEY))
+    flag = session.scalar(select(SystemFlag).where(SystemFlag.key == key))
     ok = flag is not None and secrets.compare_digest(flag.value, state or "")
     if flag is not None:
         session.delete(flag)

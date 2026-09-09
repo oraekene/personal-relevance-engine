@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
 from pydantic import AnyHttpUrl
 from sqlalchemy import select
@@ -25,10 +26,11 @@ from pre.models import (
     Goal,
     LifeDimension,
     Need,
+    NetworkLink,
     Task,
     provenance_of,
 )
-from pre.taxonomy import DIMENSIONS
+from pre.taxonomy import DIMENSIONS, DIMENSIONS_BY_CODE
 from pre.verdicts import VALID_VERDICTS
 from pre.verdicts import record_verdict as _record_verdict
 
@@ -98,31 +100,34 @@ def profile_answer(
             }
         )
     network: list[dict[str, Any]] = []
-    if dimension is None:
-        from pre.models import NetworkLink
-
-        for link in session.scalars(select(NetworkLink)).all():
-            if link.person is not None:
-                name, kind = link.person.display_name, "person"
-            elif link.organization is not None:
-                name, kind = link.organization.name, "organization"
-            else:
-                continue
-            network.append(
-                {
-                    "kind": kind,
-                    "name": name,
-                    "role": link.role,
-                    "frequency": link.frequency,
-                    "recency": link.recency,
-                    "dimension_code": link.dimension_code,
-                    **_prov(link),
-                }
-            )
+    for link in session.scalars(select(NetworkLink)).all():
+        if dimension is not None and link.dimension_code != dimension:
+            continue
+        if dimension is None and not scope:
+            continue
+        if link.person is not None:
+            name, kind = link.person.display_name, "person"
+        elif link.organization is not None:
+            name, kind = link.organization.name, "organization"
+        else:
+            continue
+        network.append(
+            {
+                "kind": kind,
+                "name": name,
+                "role": link.role,
+                "frequency": link.frequency,
+                "recency": link.recency,
+                "dimension_code": link.dimension_code,
+                **_prov(link),
+            }
+        )
     recent = []
     for item in session.scalars(
         select(DigestItem).order_by(DigestItem.assembled_at.desc())
-    ).all()[:10]:
+    ).all():
+        if item.dimension_code is not None and item.dimension_code not in scope:
+            continue
         change = session.get(Change, item.change_id)
         recent.append(
             {
@@ -138,13 +143,13 @@ def profile_answer(
                 },
             }
         )
+        if len(recent) >= 10:
+            break
     return {"dimensions": out_dims, "network": network, "recent_digest": recent}
 
 
 def create_mcp_server(session_factory: sessionmaker[Session]) -> MCPServer[Any]:
     """Build the MCP server. Mount it: app.mount("/mcp", server.streamable_http_app("/"))."""
-    from mcp.server.auth.settings import AuthSettings
-
     base = issuer_url().rstrip("/")
     server: MCPServer[Any] = MCPServer(
         "personal-relevance-engine",
@@ -194,8 +199,10 @@ def create_mcp_server(session_factory: sessionmaker[Session]) -> MCPServer[Any]:
                 raise ValueError(
                     "assistant answers are disabled — enable them in Settings"
                 )
+            if dimension is not None and dimension not in DIMENSIONS_BY_CODE:
+                raise ValueError(f"unknown dimension {dimension!r}")
             if dimension is not None and dimension not in scope:
-                raise ValueError(f"unknown or not-allowed dimension {dimension!r}")
+                raise ValueError(f"dimension {dimension!r} is not allowed")
             return profile_answer(session, scope, dimension)
         finally:
             session.close()

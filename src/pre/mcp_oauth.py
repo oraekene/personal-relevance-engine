@@ -17,6 +17,7 @@ import hashlib
 import os
 import secrets
 import urllib.parse
+from base64 import urlsafe_b64encode
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -26,8 +27,11 @@ from mcp.server.auth.provider import AccessToken
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+# Shared SystemFlag nonce pattern lives in pre.google (its OAuth flow came
+# first); the MCP issuer reuses it under its own key.
+from pre.google import check_state, new_state
 from pre.models import MCPAuthCode, MCPOAuthClient, MCPToken, SystemFlag
-from pre.taxonomy import DIMENSIONS
+from pre.taxonomy import DIMENSIONS, checked_dimension_codes
 
 SCOPES = ("digest:read", "verdict:write", "profile:read")
 SCOPE_DESCRIPTIONS = {
@@ -40,6 +44,7 @@ ACCESS_TTL_SECONDS = 3600
 REFRESH_TTL_SECONDS = 30 * 86400
 MCP_CONSENT_MASTER = "mcp_consent_master"
 MCP_CONSENT_DIMENSIONS = "mcp_consent_dimensions"
+MCP_CSRF_KEY = "mcp_oauth_csrf"
 
 
 class _InvalidClient(ValueError):
@@ -87,18 +92,16 @@ def get_mcp_consent(session: Session) -> tuple[bool, set[str] | None]:
     if master is None or master.value != "1":
         return False, set()
     dims = session.scalar(select(SystemFlag).where(SystemFlag.key == MCP_CONSENT_DIMENSIONS))
-    if dims is None or not dims.value.strip():
+    if dims is None:
         return True, None
     return True, {c.strip() for c in dims.value.split(",") if c.strip()}
 
 
-def set_mcp_consent(
-    session: Session, master: bool, dimensions: set[str] | None
-) -> None:
-    """Persist query consent. dimensions=None means all dimensions allowed."""
+def set_mcp_consent(session: Session, master: bool, dimensions: set[str]) -> None:
+    """Persist query consent. An empty set allows nothing (master on, zero areas)."""
     for key, value in (
         (MCP_CONSENT_MASTER, "1" if master else "0"),
-        (MCP_CONSENT_DIMENSIONS, ",".join(sorted(dimensions)) if dimensions is not None else ""),
+        (MCP_CONSENT_DIMENSIONS, ",".join(sorted(dimensions))),
     ):
         flag = session.scalar(select(SystemFlag).where(SystemFlag.key == key))
         if flag is None:
@@ -215,7 +218,7 @@ def approve_authorize(
     if not api_token or not secrets.compare_digest(api_token, expected):
         raise ValueError("wrong API token")
     if "profile:read" in scopes:
-        set_mcp_consent(session, allow_profile, dimensions or None)
+        set_mcp_consent(session, allow_profile, dimensions)
     code = secrets.token_urlsafe(32)
     session.add(
         MCPAuthCode(
@@ -233,10 +236,8 @@ def approve_authorize(
 
 
 def _pkce_ok(verifier: str, challenge: str) -> bool:
-    import base64
-
     digest = hashlib.sha256(verifier.encode("ascii")).digest()
-    computed = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    computed = urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
     return secrets.compare_digest(computed, challenge)
 
 
@@ -331,7 +332,7 @@ def metadata_authorization_server() -> dict[str, Any]:
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
-        "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+        "token_endpoint_auth_methods_supported": ["client_secret_post"],
     }
 
 
@@ -369,7 +370,7 @@ class VaultVerifier:
 
 def register_oauth_routes(app: FastAPI, session_factory: sessionmaker[Session]) -> None:
     """Mount the issuer endpoints on the FastAPI app (called from create_app)."""
-    from pre.web import _render
+    from pre.render import render_template
 
     def _session() -> Session:
         return session_factory()
@@ -424,7 +425,7 @@ def register_oauth_routes(app: FastAPI, session_factory: sessionmaker[Session]) 
             except ValueError as exc:
                 return Response(f"invalid_request: {exc}", status_code=400)
             return Response(
-                _render(
+                render_template(
                     "oauth_authorize.html",
                     client_name=row.client_name or row.client_id,
                     client_id=row.client_id,
@@ -434,6 +435,7 @@ def register_oauth_routes(app: FastAPI, session_factory: sessionmaker[Session]) 
                     scope_descriptions=SCOPE_DESCRIPTIONS,
                     state=params.get("state", ""),
                     code_challenge=params.get("code_challenge"),
+                    csrf=new_state(session, MCP_CSRF_KEY),
                     needs_profile="profile:read" in scopes,
                     dimensions=DIMENSIONS,
                     error=None,
@@ -472,12 +474,10 @@ def register_oauth_routes(app: FastAPI, session_factory: sessionmaker[Session]) 
 
             if str(form.get("decision", "")) != "approve":
                 return _deny()
-            checked = {
-                str(k)[4:]
-                for k in form
-                if str(k).startswith("dim_") and form.get(k)
-            }
+            checked = checked_dimension_codes(form)
             try:
+                if not check_state(session, str(form.get("csrf", "") or ""), MCP_CSRF_KEY):
+                    raise ValueError("Invalid or expired form — start over from Sources.")
                 code = approve_authorize(
                     session,
                     row.client_id,
@@ -490,7 +490,7 @@ def register_oauth_routes(app: FastAPI, session_factory: sessionmaker[Session]) 
                 )
             except (ValueError, RuntimeError) as exc:
                 return Response(
-                    _render(
+                    render_template(
                         "oauth_authorize.html",
                         client_name=row.client_name or row.client_id,
                         client_id=row.client_id,
@@ -502,6 +502,7 @@ def register_oauth_routes(app: FastAPI, session_factory: sessionmaker[Session]) 
                         code_challenge=str(form.get("code_challenge", "") or ""),
                         needs_profile="profile:read" in scopes,
                         dimensions=DIMENSIONS,
+                        csrf=new_state(session, MCP_CSRF_KEY),
                         error=str(exc),
                     ),
                     status_code=400,

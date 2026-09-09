@@ -173,7 +173,28 @@ def test_query_profile_respects_scope_and_labels(mcp_server, session: Session) -
 
     with pytest.raises(ToolError) as exc_info:
         asyncio.run(_go_narrow())
-    assert "not-allowed" in str(exc_info.value.__cause__)
+    assert "not allowed" in str(exc_info.value.__cause__)
+
+    async def _go_bogus():
+        return await mcp_server.call_tool("query_profile", {"dimension": "narnia"})
+
+    with pytest.raises(ToolError) as exc_info2:
+        asyncio.run(_go_bogus())
+    assert "unknown dimension" in str(exc_info2.value.__cause__)
+
+
+def test_empty_scope_yields_no_profile_data(mcp_server, session: Session) -> None:
+    from pre.mcp_oauth import set_mcp_consent
+    from pre.mcp_server import profile_answer
+
+    _seeded_item(session)
+    set_mcp_consent(session, True, set())
+
+    answer = profile_answer(session, set(), None)
+
+    assert answer["dimensions"] == []
+    assert answer["network"] == []
+    assert answer["recent_digest"] == []
 
 
 def test_mcp_mounted(session: Session) -> None:

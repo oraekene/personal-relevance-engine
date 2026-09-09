@@ -20,7 +20,6 @@ from typing import Any
 import anyio
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
-from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -41,8 +40,9 @@ from pre.intake import apply_interview_step
 from pre.mcp_oauth import get_mcp_consent, set_mcp_consent
 from pre.models import DigestItem, Goal, LifeDimension, Need, OAuthToken, SourceSyncState
 from pre.ops import render_ops_dashboard
+from pre.render import render_template
 from pre.settings import PRESET_ORDER, apply_preset, preset_of
-from pre.taxonomy import DIMENSIONS, DIMENSIONS_BY_CODE
+from pre.taxonomy import DIMENSIONS, DIMENSIONS_BY_CODE, checked_dimension_codes
 from pre.verdicts import VALID_VERDICTS, record_verdict
 
 
@@ -53,7 +53,7 @@ def push_link(base_url: str, digest_item_id: int) -> str:
 
 def _sources_error(session: Session, message: str, status: int) -> Response:
     return Response(
-        _render("sources.html", **_sources_view(session, error=message)),
+        render_template("sources.html", **_sources_view(session, error=message)),
         status_code=status,
         media_type="text/html",
     )
@@ -61,7 +61,7 @@ def _sources_error(session: Session, message: str, status: int) -> Response:
 
 def _settings_error(session: Session, message: str) -> Response:
     return Response(
-        _render(
+        render_template(
             "settings.html",
             rows=_settings_rows(session),
             presets=list(PRESET_ORDER),
@@ -246,18 +246,10 @@ def _step_view(
     }
 
 
-TEMPLATES_DIR = Path(__file__).parent / "templates"
-_JINJA = Environment(loader=FileSystemLoader(TEMPLATES_DIR), autoescape=True)
-
-
-def _render(name: str, **context: Any) -> str:
-    return _JINJA.get_template(name).render(**context)
-
-
 def _digest_html(session: Session, kind: str) -> str:
     mark_delivered(session, kind)
     mode = get_mode(session)
-    return _render(
+    return render_template(
         "digest.html",
         kind=kind,
         mode=mode,
@@ -301,7 +293,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             tiers = {s.tier for s in session.scalars(select(SourceSyncState)).all()}
             connected = sum(1 for _k, imp in IMPORTERS.items() if imp.tier in tiers)
             return Response(
-                _render(
+                render_template(
                     "overview.html",
                     daily=bool(daily),
                     weekly=bool(weekly),
@@ -360,7 +352,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             steps = _interview_progress(session)
             done = sum(1 for s in steps if s["done"])
             return Response(
-                _render(
+                render_template(
                     "interview_done.html",
                     passed=gate.passed,
                     failures=gate.failures,
@@ -384,7 +376,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
                 steps = _interview_progress(session)
                 done = sum(1 for s in steps if s["done"])
                 return Response(
-                    _render(
+                    render_template(
                         "interview_done.html",
                         passed=False,
                         failures=gate.failures,
@@ -406,7 +398,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             view = _step_view(session, code)
             if view is None:
                 raise HTTPException(status_code=404, detail="unknown dimension")
-            return Response(_render("interview_step.html", **view), media_type="text/html")
+            return Response(render_template("interview_step.html", **view), media_type="text/html")
         finally:
             session.close()
 
@@ -437,7 +429,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
                 view = _step_view(session, code, error=str(exc))
                 assert view is not None  # code checked above
                 return Response(
-                    _render("interview_step.html", **view),
+                    render_template("interview_step.html", **view),
                     status_code=400,
                     media_type="text/html",
                 )
@@ -450,7 +442,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
         session = session_factory()
         try:
             return Response(
-                _render("sources.html", **_sources_view(session)), media_type="text/html"
+                render_template("sources.html", **_sources_view(session)), media_type="text/html"
             )
         finally:
             session.close()
@@ -521,7 +513,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
         try:
             master, dims = get_mcp_consent(session)
             return Response(
-                _render(
+                render_template(
                     "settings.html",
                     rows=_settings_rows(session),
                     presets=list(PRESET_ORDER),
@@ -562,10 +554,10 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
     async def settings_consent_save(request: Request) -> Response:
         form = await request.form()
         master = bool(form.get("mcp_master"))
-        checked = {d.code for d in DIMENSIONS if form.get(f"dim_{d.code}")}
+        checked = checked_dimension_codes(form)
         session = session_factory()
         try:
-            set_mcp_consent(session, master, checked or None)
+            set_mcp_consent(session, master, checked)
             return RedirectResponse("/settings", status_code=303)
         finally:
             session.close()
@@ -612,7 +604,7 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
         try:
             if not is_configured():
                 return Response(
-                    _render(
+                    render_template(
                         "sources.html",
                         **_sources_view(
                             session,

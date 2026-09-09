@@ -62,6 +62,15 @@ def _authorize_params(reg: dict, **overrides: str) -> dict:
 
 
 def _approve(client, reg: dict, token: str, **extra: str):
+    import re
+
+    scope = extra.get("scope", "digest:read")
+    page = client.get(
+        "/oauth/authorize",
+        params=_authorize_params(reg, scope=scope),
+    )
+    assert page.status_code == 200
+    nonce = re.search(r"name='csrf' value='([^']+)'", page.text).group(1)
     form = {
         "client_id": reg["client_id"],
         "redirect_uri": "http://localhost:9999/cb",
@@ -70,9 +79,28 @@ def _approve(client, reg: dict, token: str, **extra: str):
         "code_challenge": CHALLENGE,
         "decision": "approve",
         "api_token": token,
+        "csrf": nonce,
     }
     form.update(extra)
     return client.post("/oauth/authorize", data=form, follow_redirects=False)
+
+
+def test_approve_rejects_missing_and_wrong_nonce(client, authed_env: str) -> None:
+    reg = _register(client)
+    base = {
+        "client_id": reg["client_id"],
+        "redirect_uri": "http://localhost:9999/cb",
+        "scope": "digest:read",
+        "state": "xyz",
+        "code_challenge": CHALLENGE,
+        "decision": "approve",
+        "api_token": authed_env,
+    }
+
+    assert client.post("/oauth/authorize", data=base).status_code == 400
+    assert client.post(
+        "/oauth/authorize", data={**base, "csrf": "bogus"}
+    ).status_code == 400
 
 
 def test_register_and_metadata(client) -> None:
@@ -84,6 +112,7 @@ def test_register_and_metadata(client) -> None:
     meta = client.get("/.well-known/oauth-authorization-server").json()
     assert meta["registration_endpoint"].endswith("/oauth/register")
     assert "S256" in meta["code_challenge_methods_supported"]
+    assert meta["token_endpoint_auth_methods_supported"] == ["client_secret_post"]
     protected = client.get("/.well-known/oauth-protected-resource").json()
     assert protected["resource"].endswith("/mcp")
     assert "digest:read" in protected["scopes_supported"]
@@ -236,18 +265,15 @@ def test_consent_flags_recorded_on_profile_grant(
     client, session: Session, authed_env: str
 ) -> None:
     reg = _register(client, scope="digest:read profile:read")
-    form = {
-        "client_id": reg["client_id"],
-        "redirect_uri": "http://localhost:9999/cb",
-        "scope": "digest:read profile:read",
-        "state": "xyz",
-        "code_challenge": CHALLENGE,
-        "decision": "approve",
-        "api_token": authed_env,
-        "allow_profile": "1",
-        "dim_business": "1",
-    }
-    assert client.post("/oauth/authorize", data=form, follow_redirects=False).status_code == 303
+    response = _approve(
+        client,
+        reg,
+        authed_env,
+        scope="digest:read profile:read",
+        allow_profile="1",
+        dim_business="1",
+    )
+    assert response.status_code == 303
 
     master = session.scalar(select(SystemFlag).where(SystemFlag.key == "mcp_consent_master"))
     dims = session.scalar(select(SystemFlag).where(SystemFlag.key == "mcp_consent_dimensions"))
