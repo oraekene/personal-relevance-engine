@@ -11,6 +11,8 @@ at the digest's item limit.
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -200,6 +202,33 @@ def surface_unscored_urgent(session: Session, kind: str = "daily") -> int:
         added += 1
     session.commit()
     return added
+
+
+def list_digest_items(session: Session, kind: str) -> list[DigestItem]:
+    """Digest items of a kind, best-first. Shared by pages, JSON API, and MCP."""
+    return list(
+        session.scalars(
+            select(DigestItem).where(DigestItem.digest_kind == kind).order_by(DigestItem.score.desc())
+        ).all()
+    )
+
+
+def item_json(item: DigestItem) -> dict[str, Any]:
+    """JSON shaping for one Digest item. Shared by pages, JSON API, and MCP."""
+    return {
+        "id": item.id,
+        "change_id": item.change_id,
+        "score": item.score,
+        "entity_type": item.entity_type,
+        "entity_id": item.entity_id,
+        "entity_label": item.entity_label,
+        "dimension_code": item.dimension_code,
+        "reasoning": item.reasoning,
+        "unscored": item.unscored,
+        "stale": item.stale,
+        "verdict": item.verdict,
+        "delivered_at": item.delivered_at.isoformat() if item.delivered_at else None,
+    }
 
 
 def render_digest(session: Session, kind: str) -> str:

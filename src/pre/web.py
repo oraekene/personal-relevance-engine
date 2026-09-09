@@ -26,7 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from pre.coldstart import coverage_gate, get_mode, go_live
-from pre.digest import ensure_matrix, mark_delivered, set_cell
+from pre.digest import ensure_matrix, item_json, list_digest_items, mark_delivered, set_cell
 from pre.google import (
     authorization_url,
     check_state,
@@ -246,23 +246,6 @@ def _step_view(
     }
 
 
-def _item_json(item: DigestItem) -> dict[str, Any]:
-    return {
-        "id": item.id,
-        "change_id": item.change_id,
-        "score": item.score,
-        "entity_type": item.entity_type,
-        "entity_id": item.entity_id,
-        "entity_label": item.entity_label,
-        "dimension_code": item.dimension_code,
-        "reasoning": item.reasoning,
-        "unscored": item.unscored,
-        "stale": item.stale,
-        "verdict": item.verdict,
-        "delivered_at": item.delivered_at.isoformat() if item.delivered_at else None,
-    }
-
-
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 _JINJA = Environment(loader=FileSystemLoader(TEMPLATES_DIR), autoescape=True)
 
@@ -274,14 +257,11 @@ def _render(name: str, **context: Any) -> str:
 def _digest_html(session: Session, kind: str) -> str:
     mark_delivered(session, kind)
     mode = get_mode(session)
-    items = session.scalars(
-        select(DigestItem).where(DigestItem.digest_kind == kind).order_by(DigestItem.score.desc())
-    ).all()
     return _render(
         "digest.html",
         kind=kind,
         mode=mode,
-        items=[_item_json(item) for item in items],
+        items=[item_json(item) for item in list_digest_items(session, kind)],
         other="weekly" if kind == "daily" else "daily",
     )
 
@@ -300,6 +280,10 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
     from pre.mcp_oauth import register_oauth_routes
 
     register_oauth_routes(app, session_factory)
+
+    from pre.mcp_server import create_mcp_server
+
+    app.mount("/mcp", create_mcp_server(session_factory).streamable_http_app(streamable_http_path="/"))
 
     @app.get("/")
     def overview() -> Response:
@@ -687,13 +671,10 @@ def create_app(session_factory: sessionmaker[Session] | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="unknown digest kind")
         session = session_factory()
         try:
-            items = session.scalars(
-                select(DigestItem).where(DigestItem.digest_kind == kind).order_by(DigestItem.score.desc())
-            ).all()
             return {
                 "kind": kind,
                 "mode": get_mode(session),
-                "items": [_item_json(item) for item in items],
+                "items": [item_json(item) for item in list_digest_items(session, kind)],
             }
         finally:
             session.close()
