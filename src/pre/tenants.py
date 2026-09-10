@@ -127,6 +127,15 @@ def resolve_session(session: Session, token: str) -> Tenant | None:
     return session.get(Tenant, row.tenant_id)
 
 
+def effective_cap_cents(tenant: Tenant | None) -> int:
+    """Monthly LLM cap for one tenant: personal override wins, else the default."""
+    from pre.cost_meter import monthly_cap_cents
+
+    if tenant is not None and tenant.cap_override_cents:
+        return tenant.cap_override_cents
+    return monthly_cap_cents()
+
+
 def open_request_session(
     cookies: Mapping[str, str],
     default_factory: Callable[[], Session],

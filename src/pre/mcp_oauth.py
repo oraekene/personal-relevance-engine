@@ -204,6 +204,7 @@ def validate_authorize(
 def approve_authorize(
     session: Session,
     client_id: str,
+    tenant_db_url: str,
     redirect_uri: str,
     scopes: list[str],
     code_challenge: str,
@@ -224,6 +225,7 @@ def approve_authorize(
         MCPAuthCode(
             code_hash=_digest(code),
             client_id=client_id,
+            tenant_db_url=tenant_db_url,
             redirect_uri=redirect_uri,
             scopes_json=scopes,
             code_challenge=code_challenge,
@@ -242,12 +244,16 @@ def _pkce_ok(verifier: str, challenge: str) -> bool:
 
 
 def _issue_pair(
-    session: Session, client_id: str, scopes: list[str]
+    session: Session, client_id: str, tenant_db_url: str, scopes: list[str]
 ) -> tuple[str, str]:
     access = secrets.token_urlsafe(32)
     refresh = secrets.token_urlsafe(32)
     now = _now()
-    row = session.scalar(select(MCPToken).where(MCPToken.client_id == client_id))
+    row = session.scalar(
+        select(MCPToken).where(
+            MCPToken.client_id == client_id, MCPToken.tenant_db_url == tenant_db_url
+        )
+    )
     values = {
         "access_hash": _digest(access),
         "refresh_hash": _digest(refresh),
@@ -256,7 +262,7 @@ def _issue_pair(
         "refresh_expires_at": now + timedelta(seconds=REFRESH_TTL_SECONDS),
     }
     if row is None:
-        session.add(MCPToken(client_id=client_id, **values))
+        session.add(MCPToken(client_id=client_id, tenant_db_url=tenant_db_url, **values))
     else:
         for key, value in values.items():
             setattr(row, key, value)
@@ -286,7 +292,7 @@ def exchange_authorization_code(
         raise _InvalidGrant("bad code, redirect, or verifier")
     stored.used = True
     session.commit()
-    access, refresh = _issue_pair(session, client_id, stored.scopes_json or [])
+    access, refresh = _issue_pair(session, client_id, stored.tenant_db_url, stored.scopes_json or [])
     scopes = stored.scopes_json or []
     return {
         "access_token": access,
@@ -311,7 +317,7 @@ def refresh_access_token(
         or _naive(_now()) > _naive(stored.refresh_expires_at)
     ):
         raise _InvalidGrant("bad or expired refresh token")
-    access, refresh = _issue_pair(session, client_id, stored.scopes_json or [])
+    access, refresh = _issue_pair(session, client_id, stored.tenant_db_url, stored.scopes_json or [])
     return {
         "access_token": access,
         "token_type": "Bearer",
@@ -346,7 +352,12 @@ def metadata_protected_resource() -> dict[str, Any]:
 
 
 class VaultVerifier:
-    """TokenVerifier: opaque access tokens checked against hashed vault rows."""
+    """TokenVerifier: opaque access tokens checked against the hashed vault.
+
+    The match location becomes the token's home: legacy rows (empty URL) route
+    to the default database, tenant rows to theirs. Single lookup, no scan —
+    all issuer rows live in the default database by design.
+    """
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._factory = session_factory
@@ -363,12 +374,17 @@ class VaultVerifier:
                 token=token,
                 client_id=row.client_id,
                 scopes=list(row.scopes_json or []),
+                claims={"tenant_db_url": row.tenant_db_url or None},
             )
         finally:
             session.close()
 
 
-def register_oauth_routes(app: FastAPI, session_factory: sessionmaker[Session]) -> None:
+def register_oauth_routes(
+    app: FastAPI,
+    session_factory: sessionmaker[Session],
+    tenant_registry_url: str | None = None,
+) -> None:
     """Mount the issuer endpoints on the FastAPI app (called from create_app)."""
     from pre.render import render_template
 
@@ -477,10 +493,25 @@ def register_oauth_routes(app: FastAPI, session_factory: sessionmaker[Session]) 
             checked = checked_dimension_codes(form)
             try:
                 if not check_state(session, str(form.get("csrf", "") or ""), MCP_CSRF_KEY):
-                    raise ValueError("Invalid or expired form — start over from Sources.")
+                    raise ValueError("Invalid or expired form - start over from Sources.")
+                tenant_db_url = ""
+                if tenant_registry_url is not None:
+                    from pre.tenants import LoginRequired, open_request_session
+
+                    try:
+                        _tenant_session, _tenant = open_request_session(
+                            request.cookies, session_factory, tenant_registry_url
+                        )
+                    except LoginRequired:
+                        return RedirectResponse("/auth/google/login", status_code=303)
+                    try:
+                        tenant_db_url = _tenant.db_url if _tenant is not None else ""
+                    finally:
+                        _tenant_session.close()
                 code = approve_authorize(
                     session,
                     row.client_id,
+                    tenant_db_url,
                     redirect_uri,
                     scopes,
                     str(form.get("code_challenge", "") or ""),

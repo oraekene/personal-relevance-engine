@@ -11,12 +11,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
 from pydantic import AnyHttpUrl
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from pre.db import make_session_factory
 from pre.digest import item_json, list_digest_items
 from pre.mcp_oauth import VaultVerifier, issuer_url, profile_query_scope
 from pre.models import (
@@ -31,6 +33,7 @@ from pre.models import (
     provenance_of,
 )
 from pre.taxonomy import DIMENSIONS, DIMENSIONS_BY_CODE
+from pre.tenants import get_engine
 from pre.verdicts import VALID_VERDICTS
 from pre.verdicts import record_verdict as _record_verdict
 
@@ -41,6 +44,21 @@ def _prov(row: Any) -> dict[str, Any]:
     stamp = info.get("last_confirmed_at")
     info["last_confirmed_at"] = stamp.isoformat() if isinstance(stamp, datetime) else None
     return info
+
+
+def _tool_session(session_factory: sessionmaker[Session]) -> Session:
+    """Open the calling tenant's database.
+
+    The verified token's claims name its home database; without token context
+    (in-process calls, legacy single-DB deploys) the default factory serves.
+    """
+    token = get_access_token()
+    url = ""
+    if token is not None:
+        url = str((token.claims or {}).get("tenant_db_url") or "")
+    if url:
+        return make_session_factory(get_engine(url))()
+    return session_factory()
 
 
 def profile_answer(
@@ -165,7 +183,7 @@ def create_mcp_server(session_factory: sessionmaker[Session]) -> MCPServer[Any]:
     def get_digest(kind: str) -> list[dict[str, Any]]:
         if kind not in ("daily", "weekly"):
             raise ValueError(f"unknown digest kind {kind!r}")
-        session = session_factory()
+        session = _tool_session(session_factory)
         try:
             return [item_json(item) for item in list_digest_items(session, kind)]
         finally:
@@ -175,7 +193,7 @@ def create_mcp_server(session_factory: sessionmaker[Session]) -> MCPServer[Any]:
     def record_verdict(item_id: int, choice: str) -> dict[str, Any]:
         if choice not in VALID_VERDICTS:
             raise ValueError("verdict must be act or dismiss")
-        session = session_factory()
+        session = _tool_session(session_factory)
         try:
             log = _record_verdict(session, item_id, choice, channel="mcp")
             return {
@@ -192,7 +210,7 @@ def create_mcp_server(session_factory: sessionmaker[Session]) -> MCPServer[Any]:
         "are disabled; pass a dimension code to narrow to one area."
     )
     def query_profile(dimension: str | None = None) -> dict[str, Any]:
-        session = session_factory()
+        session = _tool_session(session_factory)
         try:
             scope = profile_query_scope(session)
             if scope is None:

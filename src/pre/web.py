@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from pre.coldstart import coverage_gate, get_mode, go_live
+from pre.cost_meter import month_to_date_cents
 from pre.db import make_session_factory
 from pre.digest import ensure_matrix, item_json, list_digest_items, mark_delivered, set_cell
 from pre.google import (
@@ -41,7 +42,7 @@ from pre.ingest import IMPORTERS, import_file
 from pre.intake import apply_interview_step
 from pre.mcp_oauth import get_mcp_consent, set_mcp_consent
 from pre.models import DigestItem, Goal, LifeDimension, Need, OAuthToken, SourceSyncState
-from pre.ops import render_ops_dashboard
+from pre.ops import last_backup_at, render_ops_dashboard
 from pre.render import render_template
 from pre.settings import PRESET_ORDER, apply_preset, preset_of
 from pre.taxonomy import DIMENSIONS, DIMENSIONS_BY_CODE, checked_dimension_codes
@@ -52,6 +53,8 @@ from pre.tenants import (
     Tenant,
     create_session_token,
     destroy_session,
+    effective_cap_cents,
+    get_engine,
     get_registry,
     login_authorization_url,
     login_exchange,
@@ -294,7 +297,7 @@ def create_app(
 
     from pre.mcp_oauth import register_oauth_routes
 
-    register_oauth_routes(app, session_factory)
+    register_oauth_routes(app, session_factory, tenant_registry_url)
 
     from pre.mcp_server import create_mcp_server
 
@@ -818,11 +821,45 @@ def create_app(
     @app.get("/api/ops")
     def api_ops(request: Request) -> dict[str, str]:
         _require_token(request)
-        session, _tenant = _open_tenant(request)
+        session = session_factory()
         try:
             return {"dashboard": render_ops_dashboard(session)}
         finally:
             session.close()
+
+    @app.get("/api/ops/tenants")
+    def api_ops_tenants(request: Request) -> dict[str, Any]:
+        """Operator rollup: spend, cap, and backup state per tenant.
+
+        Gated by a dedicated operator token (PRE_OPERATOR_TOKEN), never the
+        tenant bearer: tenants must not enumerate each other.
+        """
+        expected = os.environ.get("PRE_OPERATOR_TOKEN", "")
+        if not expected or request.headers.get("authorization", "") != f"Bearer {expected}":
+            raise HTTPException(status_code=403, detail="operator access required")
+        if tenant_registry_url is None:
+            raise HTTPException(status_code=400, detail="multi-tenant mode only")
+        reg = make_session_factory(get_registry(tenant_registry_url))()
+        try:
+            rows = []
+            for tenant in reg.scalars(select(Tenant)).all():
+                tenant_session = make_session_factory(get_engine(tenant.db_url))()
+                try:
+                    spent = month_to_date_cents(tenant_session)
+                    backup = last_backup_at(tenant_session)
+                finally:
+                    tenant_session.close()
+                rows.append(
+                    {
+                        "email": tenant.email,
+                        "spent_cents": spent,
+                        "cap_cents": effective_cap_cents(tenant),
+                        "last_backup": backup.isoformat() if backup else None,
+                    }
+                )
+            return {"tenants": rows}
+        finally:
+            reg.close()
 
     @app.get("/api/interview")
     def api_interview(request: Request) -> dict[str, Any]:

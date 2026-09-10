@@ -347,6 +347,7 @@ class MCPAuthCode(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     code_hash: Mapped[str] = mapped_column(String(64))
     client_id: Mapped[str] = mapped_column(String(64))
+    tenant_db_url: Mapped[str] = mapped_column(String(1024), default="")
     redirect_uri: Mapped[str] = mapped_column(String(512))
     scopes_json: Mapped[list[str]] = mapped_column(JSON, default=list)
     code_challenge: Mapped[str] = mapped_column(String(128))
@@ -358,10 +359,11 @@ class MCPToken(Base):
     """Issued token pairs. Only hashes rest here; plaintext exists in transit only."""
 
     __tablename__ = "mcp_tokens"
-    __table_args__ = (UniqueConstraint("client_id"),)
+    __table_args__ = (UniqueConstraint("client_id", "tenant_db_url"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     client_id: Mapped[str] = mapped_column(String(64))
+    tenant_db_url: Mapped[str] = mapped_column(String(1024), default="")
     access_hash: Mapped[str] = mapped_column(String(64))
     refresh_hash: Mapped[str] = mapped_column(String(64))
     scopes_json: Mapped[list[str]] = mapped_column(JSON, default=list)
