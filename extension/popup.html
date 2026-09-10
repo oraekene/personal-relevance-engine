@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Relevance</title>
+<style>
+  body { width: 340px; font: 13px system-ui, sans-serif; margin: 12px; }
+  button { margin-left: 6px; }
+  li { margin-bottom: 8px; }
+  .muted { color: #666; }
+  #error { color: #a00; }
+</style>
+<h3>Today's digest</h3>
+<p id="status" class="muted">Loading…</p>
+<p id="error"></p>
+<p id="login-row" hidden><button id="login">Sign in with Google</button></p>
+<ul id="items"></ul>
+<p>
+  <label><input type="checkbox" id="capture"> Capture visited pages</label>
+</p>
+<script src="popup.js"></script>

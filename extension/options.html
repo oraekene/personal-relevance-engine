@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Relevance options</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 24px; max-width: 560px; }
+  label { display: block; margin: 12px 0; }
+  input[type=text] { width: 100%; }
+  textarea { width: 100%; height: 80px; }
+</style>
+<h3>Relevance engine options</h3>
+<label>Server <input type="text" id="server"></label>
+<label><input type="checkbox" id="capture"> Capture visited pages automatically</label>
+<label>Never capture these hosts (one per line)
+  <textarea id="blocked"></textarea>
+</label>
+<p><button id="save">Save</button> <span id="saved"></span></p>
+<script src="options.js"></script>

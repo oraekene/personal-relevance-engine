@@ -29,6 +29,12 @@ from pre.coldstart import coverage_gate, get_mode, go_live
 from pre.cost_meter import month_to_date_cents
 from pre.db import make_session_factory
 from pre.digest import ensure_matrix, item_json, list_digest_items, mark_delivered, set_cell
+from pre.extension import (
+    get_consent,
+    overlay_matches,
+    record_capture,
+    set_consent,
+)
 from pre.google import (
     authorization_url,
     check_state,
@@ -179,6 +185,16 @@ def _require_token(request: Request) -> None:
 class VerdictIn(BaseModel):
     item_id: int
     choice: str
+
+
+class CaptureIn(BaseModel):
+    url: str
+    title: str
+
+
+class CaptureConsentIn(BaseModel):
+    enabled: bool
+    blocked_hosts: list[str] = []
 
 
 class InterviewGoalIn(BaseModel):
@@ -919,6 +935,53 @@ def create_app(
                 gate = coverage_gate(session)
                 raise HTTPException(status_code=409, detail={"failures": gate.failures}) from None
             return {"mode": "live"}
+        finally:
+            session.close()
+
+    @app.post("/api/capture")
+    def api_capture(payload: CaptureIn, request: Request) -> dict[str, Any]:
+        """Browser extension lane: capture the visited page into the corpus."""
+        _require_token(request)
+        session, _tenant = _open_tenant(request)
+        try:
+            try:
+                outcome = record_capture(session, payload.url, payload.title)
+            except PermissionError as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {"outcome": outcome.outcome, "product": outcome.product}
+        finally:
+            session.close()
+
+    @app.get("/api/capture/status")
+    def api_capture_status(request: Request) -> dict[str, Any]:
+        _require_token(request)
+        session, _tenant = _open_tenant(request)
+        try:
+            enabled, blocked = get_consent(session)
+            return {"enabled": enabled, "blocked_hosts": sorted(blocked)}
+        finally:
+            session.close()
+
+    @app.post("/api/capture/consent")
+    def api_capture_consent(payload: CaptureConsentIn, request: Request) -> dict[str, Any]:
+        _require_token(request)
+        session, _tenant = _open_tenant(request)
+        try:
+            set_consent(session, payload.enabled, set(payload.blocked_hosts))
+            enabled, blocked = get_consent(session)
+            return {"enabled": enabled, "blocked_hosts": sorted(blocked)}
+        finally:
+            session.close()
+
+    @app.get("/api/overlay")
+    def api_overlay(url: str, request: Request) -> dict[str, Any]:
+        """Page overlay: digest items matching the visited page's host."""
+        _require_token(request)
+        session, _tenant = _open_tenant(request)
+        try:
+            return {"matches": overlay_matches(session, url)}
         finally:
             session.close()
 

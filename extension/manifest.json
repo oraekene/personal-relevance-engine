@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Personal Relevance Engine",
+  "version": "0.1.0",
+  "description": "Digest verdicts plus visited-page capture for your relevance engine.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "action": { "default_popup": "popup.html", "default_title": "Relevance" },
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html"
+}
