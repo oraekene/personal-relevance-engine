@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session, sessionmaker
 # Shared SystemFlag nonce pattern lives in pre.google (its OAuth flow came
 # first); the MCP issuer reuses it under its own key.
 from pre.google import check_state, new_state
-from pre.models import MCPAuthCode, MCPOAuthClient, MCPToken, SystemFlag
+from pre.models import MCPAuthCode, MCPOAuthClient, MCPToken, SystemFlag, naive
 from pre.taxonomy import DIMENSIONS, checked_dimension_codes
 
 SCOPES = ("digest:read", "verdict:write", "profile:read")
@@ -61,10 +61,6 @@ def issuer_url() -> str:
 
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _naive(moment: datetime) -> datetime:
-    return moment.replace(tzinfo=None) if moment.tzinfo is not None else moment
 
 
 def _now() -> datetime:
@@ -284,7 +280,7 @@ def exchange_authorization_code(
     if (
         stored is None
         or stored.used
-        or _naive(_now()) > _naive(stored.expires_at)
+        or naive(_now()) > naive(stored.expires_at)
         or stored.client_id != client_id
         or stored.redirect_uri != redirect_uri
         or not _pkce_ok(code_verifier, stored.code_challenge)
@@ -314,7 +310,7 @@ def refresh_access_token(
     if (
         stored is None
         or stored.client_id != client_id
-        or _naive(_now()) > _naive(stored.refresh_expires_at)
+        or naive(_now()) > naive(stored.refresh_expires_at)
     ):
         raise _InvalidGrant("bad or expired refresh token")
     access, refresh = _issue_pair(session, client_id, stored.tenant_db_url, stored.scopes_json or [])
@@ -368,7 +364,7 @@ class VaultVerifier:
             row = session.scalar(
                 select(MCPToken).where(MCPToken.access_hash == _digest(token))
             )
-            if row is None or _naive(_now()) > _naive(row.access_expires_at):
+            if row is None or naive(_now()) > naive(row.access_expires_at):
                 return None
             return AccessToken(
                 token=token,

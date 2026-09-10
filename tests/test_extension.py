@@ -132,6 +132,17 @@ def test_record_capture_rejects_bad_input(session: Session) -> None:
         record_capture(session, "https://example.com/p", "  ")
 
 
+def test_record_capture_refuses_app_host(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pre.extension import record_capture, set_consent
+
+    monkeypatch.setenv("PRE_PUBLIC_URL", "https://app.example")
+    set_consent(session, True, set())
+    with pytest.raises(ValueError, match="app itself"):
+        record_capture(session, "https://app.example/digest/daily", "Digest page")
+
+
 def test_record_capture_creates_then_dedupes(session: Session) -> None:
     from pre.extension import record_capture, set_consent
 
@@ -179,6 +190,26 @@ def test_capture_requires_login(tclient) -> None:
     assert tclient.get("/api/overlay?url=https://e.com/p").status_code == 401
 
 
+def test_cookie_authenticates_api_when_bearer_configured(
+    tclient, session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _login(tclient, session, monkeypatch, tmp_path)
+    monkeypatch.setenv("PRE_API_TOKEN", "server-token")
+    assert tclient.get("/api/digest/daily").status_code == 200
+    assert tclient.get("/api/capture/status").status_code == 200
+
+
+def test_bearer_without_cookie_stays_rejected(
+    tclient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PRE_API_TOKEN", "server-token")
+    assert tclient.get("/api/digest/daily").status_code == 401
+    denied = tclient.get(
+        "/api/digest/daily", headers={"authorization": "Bearer server-token"}
+    )
+    assert denied.status_code == 401
+
+
 def test_capture_consent_gate(
     tclient, session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -214,6 +245,19 @@ def test_capture_blocked_host(
         "/api/capture", json={"url": "https://example.com/p", "title": "Example page"}
     )
     assert blocked.status_code == 403
+
+
+def test_consent_toggle_preserves_blocklist(
+    tclient, session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _login(tclient, session, monkeypatch, tmp_path)
+    tclient.post(
+        "/api/capture/consent", json={"enabled": True, "blocked_hosts": ["example.com"]}
+    )
+    toggled = tclient.post("/api/capture/consent", json={"enabled": True})
+    assert toggled.json() == {"enabled": True, "blocked_hosts": ["example.com"]}
+    replaced = tclient.post("/api/capture/consent", json={"enabled": True, "blocked_hosts": []})
+    assert replaced.json() == {"enabled": True, "blocked_hosts": []}
 
 
 def test_overlay_matches_visited_page(
@@ -257,3 +301,6 @@ def test_overlay_matches_visited_page(
 
     other = tclient.get("/api/overlay", params={"url": "https://other.example/page"})
     assert other.json()["matches"] == []
+
+    elsewhere = tclient.get("/api/overlay", params={"url": "https://example.com/careers"})
+    assert elsewhere.json()["matches"] == []

@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pre.models import DigestItem, PushSubscription, SystemFlag
+from pre.models import DigestItem, PushSubscription, SystemFlag, naive
 
 QUIET_START_KEY = "push_quiet_start"
 QUIET_END_KEY = "push_quiet_end"
@@ -26,10 +26,6 @@ DEFAULT_QUIET_START = 22
 DEFAULT_QUIET_END = 7
 
 Sender = Callable[[PushSubscription, Mapping[str, object]], None]
-
-
-def _naive(moment: datetime) -> datetime:
-    return moment.replace(tzinfo=None) if moment.tzinfo is not None else moment
 
 
 def _get_flag(session: Session, key: str) -> str | None:
@@ -68,7 +64,7 @@ def set_quiet_hours(session: Session, start: int, end: int) -> None:
 def in_quiet_hours(session: Session, now: datetime | None = None) -> bool:
     """Whether delivery should wait for morning (overnight windows wrap)."""
     start, end = get_quiet_hours(session)
-    hour = (_naive(now) if now is not None else _naive(datetime.now(UTC))).hour
+    hour = (naive(now) if now is not None else naive(datetime.now(UTC))).hour
     if start <= end:
         return start <= hour < end
     return hour >= start or hour < end
@@ -162,15 +158,15 @@ def notify_new_digest(
     from pywebpush import WebPushException
 
     send = sender or _pywebpush_sender
-    moment = _naive(now) if now is not None else _naive(datetime.now(UTC))
+    moment = naive(now) if now is not None else naive(datetime.now(UTC))
     pending = session.scalars(select(DigestItem).where(DigestItem.verdict.is_(None))).all()
     summary: dict[str, int | bool] = {"sent": 0, "pruned": 0, "undecided": len(pending),
                                       "skipped_quiet": False}
     if not pending:
         return summary
-    newest = max(_naive(item.assembled_at) for item in pending)
+    newest = max(naive(item.assembled_at) for item in pending)
     last = _last_notify(session)
-    if last is not None and newest <= _naive(last):
+    if last is not None and newest <= naive(last):
         return summary
     if in_quiet_hours(session, moment):
         summary["skipped_quiet"] = True
@@ -196,8 +192,9 @@ def notify_new_digest(
                 pruned += 1
             continue
     session.commit()
-    _set_flag(session, LAST_NOTIFY_KEY, moment.isoformat())
-    session.commit()
+    if sent:
+        _set_flag(session, LAST_NOTIFY_KEY, moment.isoformat())
+        session.commit()
     summary["sent"], summary["pruned"] = sent, pruned
     return summary
 

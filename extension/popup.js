@@ -4,6 +4,7 @@
 "use strict";
 
 const DEFAULT_SERVER = "http://127.0.0.1:8787";
+const MAX_POPUP_ITEMS = 20; // keeps the popup readable; the rest wait in the digest
 
 async function server() {
   const got = await chrome.storage.sync.get({ server: DEFAULT_SERVER });
@@ -30,7 +31,7 @@ async function load() {
     status.textContent = items.length ? `${items.length} undecided` : "All decided. Nice.";
     const list = document.getElementById("items");
     list.replaceChildren();
-    for (const item of items.slice(0, 20)) {
+    for (const item of items.slice(0, MAX_POPUP_ITEMS)) {
       const row = document.createElement("li");
       row.textContent = `${item.score} — ${item.entity_label} `;
       for (const choice of ["act", "dismiss"]) {
@@ -69,7 +70,7 @@ document.getElementById("capture").onchange = async (event) => {
     await api("/api/capture/consent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled: event.target.checked, blocked_hosts: [] }),
+      body: JSON.stringify({ enabled: event.target.checked }),
     });
   } catch (error) {
     showError(String(error.message || error).slice(0, 200));

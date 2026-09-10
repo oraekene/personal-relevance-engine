@@ -30,7 +30,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from pre.models import OAuthToken, SystemFlag
+from pre.models import OAuthToken, SystemFlag, naive
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -190,16 +190,12 @@ def store_tokens(
     return row
 
 
-def _naive(moment: datetime) -> datetime:
-    return moment.replace(tzinfo=None) if moment.tzinfo is not None else moment
-
-
 def _valid_access_token(session: Session, row: OAuthToken) -> str:
     """Fresh access token, refreshing in place when within a minute of expiry."""
     fresh_until = None
     if row.expires_at is not None:
-        fresh_until = _naive(row.expires_at) - timedelta(seconds=60)
-    if fresh_until is not None and _naive(datetime.now(UTC)) < fresh_until:
+        fresh_until = naive(row.expires_at) - timedelta(seconds=60)
+    if fresh_until is not None and naive(datetime.now(UTC)) < fresh_until:
         return _open(row.access_token_enc)
     payload = _http_json(
         "POST",

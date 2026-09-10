@@ -5,6 +5,7 @@
 "use strict";
 
 (async () => {
+  const MAX_OVERLAY_MATCHES = 3; // one bar, not a second digest
   try {
     if (!chrome.runtime?.id) return;
     const got = await chrome.storage.sync.get({ server: "http://127.0.0.1:8787" });
@@ -20,7 +21,7 @@
       credentials: "include",
     });
     if (!response.ok) return;
-    const matches = (await response.json()).matches.filter((m) => !m.verdict).slice(0, 3);
+    const matches = (await response.json()).matches.filter((m) => !m.verdict).slice(0, MAX_OVERLAY_MATCHES);
     if (!matches.length) return;
 
     const bar = document.createElement("div");

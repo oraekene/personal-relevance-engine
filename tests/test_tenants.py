@@ -342,6 +342,8 @@ def test_effective_cap_prefers_override(monkeypatch: pytest.MonkeyPatch) -> None
     assert effective_cap_cents(plain) == 7777
     boosted = Tenant(email="b@x.co", db_url="sqlite:///b.db", cap_override_cents=500)
     assert effective_cap_cents(boosted) == 500
+    frozen = Tenant(email="c@x.co", db_url="sqlite:///c.db", cap_override_cents=0)
+    assert effective_cap_cents(frozen) == 0
     assert DEFAULT_MONTHLY_CAP_CENTS == 2000
 
 

@@ -9,8 +9,10 @@ same-URL-once noise policy — live here, never in the corpus.
 
 from __future__ import annotations
 
+import os
 import urllib.parse
 from dataclasses import dataclass
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -27,7 +29,7 @@ MAX_TITLE_LEN = 256
 
 @dataclass(frozen=True)
 class CaptureOutcome:
-    outcome: str  # 'created' | 'deduped' | 'strengthened'
+    outcome: Literal["created", "deduped", "strengthened"]
     product: str
 
 
@@ -62,6 +64,11 @@ def normalize_url(url: str) -> str:
     path = parts.path.rstrip("/") if parts.path != "/" else ""
     query = f"?{parts.query}" if parts.query else ""
     return f"{parts.scheme.lower()}://{host}{path}{query}"
+
+
+def _app_host() -> str:
+    """The app's own host (same default as the OAuth issuer): never captured."""
+    return host_of(os.environ.get("PRE_PUBLIC_URL", "http://127.0.0.1:8787"))
 
 
 def get_consent(session: Session) -> tuple[bool, set[str]]:
@@ -111,6 +118,8 @@ def record_capture(session: Session, url: str, title: str) -> CaptureOutcome:
     ValueError on bad input.
     """
     entry = build_entry(url, title)
+    if host_of(url) == _app_host():
+        raise ValueError("not capturing the app itself")
     enabled, blocked = get_consent(session)
     if not enabled:
         raise PermissionError("browser capture is disabled for this tenant")
@@ -127,16 +136,26 @@ def record_capture(session: Session, url: str, title: str) -> CaptureOutcome:
     )
 
 
+def _page_key(url: str) -> tuple[str, str]:
+    """(host, path) identity for overlay matching: query-insensitive, slash-insensitive."""
+    try:
+        parts = urllib.parse.urlparse(url.strip())
+    except ValueError:
+        return "", ""
+    path = parts.path.rstrip("/") if parts.path != "/" else ""
+    return (parts.hostname or "").lower(), path
+
+
 def overlay_matches(session: Session, url: str) -> list[dict[str, object]]:
-    """Digest items whose Change lives on the visited page's host, best first."""
-    host = host_of(url)
-    if not host:
+    """Digest items for the visited page: same host and path, best first."""
+    if not host_of(url):
         return []
+    wanted = _page_key(url)
     matches = []
     items = session.scalars(select(DigestItem).order_by(DigestItem.score.desc())).all()
     for item in items:
         change = session.get(Change, item.change_id)
-        if change is None or not change.url or host_of(change.url) != host:
+        if change is None or not change.url or _page_key(change.url) != wanted:
             continue
         matches.append(
             {

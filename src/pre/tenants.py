@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from pre.db import init_db, init_registry, make_engine, make_session_factory
 from pre.google import GOOGLE_TOKEN_URL, GOOGLE_USERINFO_URL
-from pre.models import Tenant, TenantSession
+from pre.models import Tenant, TenantSession, naive
 
 SESSION_COOKIE = "pre_session"
 SESSION_TTL_DAYS = 30
@@ -68,10 +68,6 @@ def get_registry(registry_url: str) -> Engine:
 
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _naive(moment: datetime) -> datetime:
-    return moment.replace(tzinfo=None) if moment.tzinfo is not None else moment
 
 
 def provision_sqlite_tenant(base_dir: str | Path, email: str) -> str:
@@ -122,7 +118,7 @@ def resolve_session(session: Session, token: str) -> Tenant | None:
     if not token:
         return None
     row = session.scalar(select(TenantSession).where(TenantSession.token_hash == _digest(token)))
-    if row is None or _naive(datetime.now(UTC)) > _naive(row.expires_at):
+    if row is None or naive(datetime.now(UTC)) > naive(row.expires_at):
         return None
     return session.get(Tenant, row.tenant_id)
 
@@ -131,7 +127,7 @@ def effective_cap_cents(tenant: Tenant | None) -> int:
     """Monthly LLM cap for one tenant: personal override wins, else the default."""
     from pre.cost_meter import monthly_cap_cents
 
-    if tenant is not None and tenant.cap_override_cents:
+    if tenant is not None and tenant.cap_override_cents is not None:
         return tenant.cap_override_cents
     return monthly_cap_cents()
 

@@ -218,6 +218,18 @@ def test_notify_silent_without_subscriptions(session: Session) -> None:
     assert notify_new_digest(session, "https://app.example", sender=_Sender())["sent"] == 0
 
 
+def test_failed_notify_retries_instead_of_stamping(session: Session) -> None:
+    from pre.push import add_subscription, notify_new_digest
+
+    _seed_undecided(session)
+    add_subscription(session, SUB["endpoint"], SUB["keys"])
+    failed = notify_new_digest(session, "https://app.example", sender=_Sender(dead=True))
+    assert failed["sent"] == 0
+    add_subscription(session, SUB["endpoint"], SUB["keys"])
+    retried = notify_new_digest(session, "https://app.example", sender=_Sender())
+    assert retried["sent"] == 1
+
+
 # --- API ---------------------------------------------------------------------
 
 

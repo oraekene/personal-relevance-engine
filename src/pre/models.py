@@ -26,6 +26,11 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def naive(moment: datetime) -> datetime:
+    """Strip tzinfo for comparing stored timestamps (SQLite returns naive)."""
+    return moment.replace(tzinfo=None) if moment.tzinfo is not None else moment
+
+
 class Base(DeclarativeBase):
     pass
 

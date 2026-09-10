@@ -182,7 +182,12 @@ def _require_token(request: Request) -> None:
 
     One env-configured token implies the tenant. Unset keeps local-dev parity
     (deployment fronts auth); set requires `Authorization: Bearer <token>`.
+    A tenant session cookie passes on its own (ticket 26: the extension logs
+    in through Google and carries no bearer); `_open_tenant` validates it
+    next, so forged cookies still fail closed.
     """
+    if SESSION_COOKIE in request.cookies:
+        return
     expected = os.environ.get("PRE_API_TOKEN", "")
     if not expected:
         return
@@ -202,7 +207,7 @@ class CaptureIn(BaseModel):
 
 class CaptureConsentIn(BaseModel):
     enabled: bool
-    blocked_hosts: list[str] = []
+    blocked_hosts: list[str] | None = None
 
 
 class PushSubIn(BaseModel):
@@ -1004,9 +1009,12 @@ def create_app(
         _require_token(request)
         session, _tenant = _open_tenant(request)
         try:
-            set_consent(session, payload.enabled, set(payload.blocked_hosts))
-            enabled, blocked = get_consent(session)
-            return {"enabled": enabled, "blocked_hosts": sorted(blocked)}
+            _, blocked = get_consent(session)
+            if payload.blocked_hosts is not None:
+                blocked = set(payload.blocked_hosts)
+            set_consent(session, payload.enabled, blocked)
+            enabled, kept = get_consent(session)
+            return {"enabled": enabled, "blocked_hosts": sorted(kept)}
         finally:
             session.close()
 

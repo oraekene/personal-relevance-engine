@@ -3,7 +3,7 @@
   "name": "Personal Relevance Engine",
   "version": "0.1.0",
   "description": "Digest verdicts plus visited-page capture for your relevance engine.",
-  "permissions": ["storage", "tabs"],
+  "permissions": ["storage"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "action": { "default_popup": "popup.html", "default_title": "Relevance" },
   "background": { "service_worker": "background.js" },

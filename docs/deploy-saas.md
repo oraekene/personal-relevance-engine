@@ -31,6 +31,7 @@ pre serve --host 0.0.0.0 --port 8787
 
 # Back up: copy the registry plus every tenant file nightly via cron
 pre backup --db sqlite:///saas/registry.db --file backups/registry.db
+for db in saas/tenants/*.db; do pre backup --db "sqlite:///$db" --file "backups/$(basename "$db")"; done
 ```
 
 Revoking a login is a row delete (`POST /auth/logout` does it); a stolen
