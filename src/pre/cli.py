@@ -191,6 +191,14 @@ def _build_parser() -> argparse.ArgumentParser:
     add_db(provider_cmd)
     provider_cmd.add_argument("--result", required=True, choices=["ok", "fail"])
 
+    notify_cmd = sub.add_parser("notify", help="Send web-push digests (cron entry point)")
+    notify_cmd.add_argument("--db", default=None, help="one tenant database URL")
+    notify_cmd.add_argument("--registry", default=None, help="fan out to every tenant")
+    notify_cmd.add_argument("--base-url", default=None, help="public app URL for links")
+    notify_cmd.add_argument("--dry-run", action="store_true")
+
+    sub.add_parser("vapid-keygen", help="Mint a VAPID pair for web push")
+
     prov_tenant = sub.add_parser("provision-tenant", help="Register a tenant database (operator)")
     prov_tenant.add_argument("--email", required=True)
     prov_tenant.add_argument("--db-url", required=True)
@@ -710,6 +718,68 @@ def _cmd_sync_live(args: argparse.Namespace) -> int:
         session.close()
 
 
+def _cmd_notify(args: argparse.Namespace) -> int:
+    """Cron entry point: push undecided digests (one tenant or the registry)."""
+    import sys
+
+    from pre.db import make_session_factory
+    from pre.push import list_subscriptions, notify_new_digest
+
+    base_url = args.base_url or os.environ.get("PRE_PUBLIC_URL", "http://127.0.0.1:8787")
+    db_urls: list[str] = []
+    if args.registry:
+        from sqlalchemy import select
+
+        from pre.models import Tenant
+        from pre.tenants import get_registry
+
+        reg = make_session_factory(get_registry(args.registry))()
+        try:
+            db_urls = [t.db_url for t in reg.scalars(select(Tenant)).all()]
+        finally:
+            reg.close()
+    elif args.db:
+        db_urls = [args.db]
+    else:
+        print("notify failed: pass --db or --registry", file=sys.stderr)
+        return 1
+    total = 0
+    for db_url in db_urls:
+        session = _open_session(db_url)
+        try:
+            if args.dry_run:
+                from sqlalchemy import select
+
+                from pre.models import DigestItem
+
+                pending = session.scalars(
+                    select(DigestItem).where(DigestItem.verdict.is_(None))
+                ).all()
+                print(f"{db_url}: {len(pending)} undecided, "
+                      f"{len(list_subscriptions(session))} subscriptions (dry run)")
+                continue
+            summary = notify_new_digest(session, base_url)
+            print(f"{db_url}: sent {summary['sent']} "
+                  f"(undecided {summary['undecided']}, pruned {summary['pruned']})")
+            total += int(summary["sent"])
+        finally:
+            session.close()
+    return 0
+
+
+def _cmd_vapid_keygen(args: argparse.Namespace) -> int:
+    import sys
+
+    from pre.push import generate_vapid_keys
+
+    keys = generate_vapid_keys()
+    print(f"PRE_VAPID_PUBLIC_KEY={keys['public']}")
+    print("PRE_VAPID_PRIVATE_KEY=<printed to stderr; keep it secret>", file=sys.stderr)
+    print(keys["private"], file=sys.stderr)
+    print("Also set PRE_VAPID_CONTACT=mailto:you@example.com", file=sys.stderr)
+    return 0
+
+
 def _cmd_provision_tenant(args: argparse.Namespace) -> int:
     from pre.db import make_session_factory
     from pre.tenants import get_registry, register_tenant
@@ -769,6 +839,8 @@ def main(argv: list[str] | None = None) -> int:
         "prune": _cmd_prune,
         "provider": _cmd_provider,
         "provision-tenant": _cmd_provision_tenant,
+        "notify": _cmd_notify,
+        "vapid-keygen": _cmd_vapid_keygen,
         "sync-live": _cmd_sync_live,
     }
     return handlers[args.command](args)

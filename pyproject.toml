@@ -15,6 +15,7 @@ dependencies = [
     "anyio>=4",
     "cryptography>=41",
     "mcp>=2.2.0",
+    "pywebpush>=2.2",
 ]
 
 [project.optional-dependencies]
@@ -50,4 +51,4 @@ strict = true
 files = ["src"]
 
 [tool.setuptools.package-data]
-pre = ["templates/*.html"]
+pre = ["templates/*.html", "icon.svg"]

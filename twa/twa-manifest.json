@@ -1,0 +1,15 @@
+{
+  "package": "REPLACE.ME.with.play.package",
+  "host": "https://REPLACE.ME.with.app.domain",
+  "name": "Relevance",
+  "launcherName": "Relevance",
+  "display": "standalone",
+  "themeColor": "#111111",
+  "navigationColor": "#111111",
+  "backgroundColor": "#ffffff",
+  "startUrl": "/",
+  "iconUrl": "https://REPLACE.ME.with.app.domain/icon.svg",
+  "maskableIconUrl": "https://REPLACE.ME.with.app.domain/icon.svg",
+  "notifications": true,
+  "delegationService": "https://REPLACE.ME.with.app.domain/.well-known/assetlinks.json"
+}

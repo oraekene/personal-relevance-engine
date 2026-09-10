@@ -486,6 +486,20 @@ class SystemFlag(Base):
     set_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class PushSubscription(Base):
+    """One browser push endpoint (ticket 27). Lives in the tenant database,
+    so subscriptions are per-tenant by placement — never a shared table."""
+
+    __tablename__ = "push_subscriptions"
+    __table_args__ = (UniqueConstraint("endpoint"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    endpoint: Mapped[str] = mapped_column(String(1024))
+    p256dh: Mapped[str] = mapped_column(String(256), default="")
+    auth: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class RegistryBase(DeclarativeBase):
     """Separate metadata for the tenancy control plane (issue 25).
 

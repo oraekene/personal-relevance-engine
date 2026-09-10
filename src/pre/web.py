@@ -49,6 +49,14 @@ from pre.intake import apply_interview_step
 from pre.mcp_oauth import get_mcp_consent, set_mcp_consent
 from pre.models import DigestItem, Goal, LifeDimension, Need, OAuthToken, SourceSyncState
 from pre.ops import last_backup_at, render_ops_dashboard
+from pre.push import (
+    add_subscription,
+    get_quiet_hours,
+    list_subscriptions,
+    remove_subscription,
+    set_quiet_hours,
+    vapid_public_key,
+)
 from pre.render import render_template
 from pre.settings import PRESET_ORDER, apply_preset, preset_of
 from pre.taxonomy import DIMENSIONS, DIMENSIONS_BY_CODE, checked_dimension_codes
@@ -195,6 +203,33 @@ class CaptureIn(BaseModel):
 class CaptureConsentIn(BaseModel):
     enabled: bool
     blocked_hosts: list[str] = []
+
+
+class PushSubIn(BaseModel):
+    endpoint: str
+    keys: dict[str, str] = {}
+
+
+class PushQuietIn(BaseModel):
+    start_hour: int
+    end_hour: int
+
+
+SW_JS = """\
+self.addEventListener("push", (event) => {
+  const data = event.data ? event.data.json() : {};
+  event.waitUntil(
+    self.registration.showNotification(data.title || "Relevance", {
+      body: data.body || "",
+      data: { url: data.url || "/digest/daily" },
+    })
+  );
+});
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(clients.openWindow(event.notification.data.url));
+});
+"""
 
 
 class InterviewGoalIn(BaseModel):
@@ -982,6 +1017,108 @@ def create_app(
         session, _tenant = _open_tenant(request)
         try:
             return {"matches": overlay_matches(session, url)}
+        finally:
+            session.close()
+
+    @app.get("/manifest.webmanifest")
+    def pwa_manifest() -> dict[str, Any]:
+        """Installable-web-app manifest (the TWA wraps this)."""
+        return {
+            "name": "Personal Relevance Engine",
+            "short_name": "Relevance",
+            "start_url": "/",
+            "display": "standalone",
+            "background_color": "#ffffff",
+            "theme_color": "#111111",
+            "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml"}],
+        }
+
+    @app.get("/sw.js")
+    def service_worker() -> Response:
+        """Push receiver: shows the notification, opens the digest on tap."""
+        return Response(SW_JS, media_type="application/javascript")
+
+    @app.get("/icon.svg")
+    def app_icon() -> Response:
+        from fastapi.responses import FileResponse
+
+        return FileResponse(Path(__file__).with_name("icon.svg"), media_type="image/svg+xml")
+
+    @app.get("/.well-known/assetlinks.json")
+    def assetlinks() -> list[dict[str, Any]]:
+        """Digital Asset Links: binds the domain to the Play app (TWA)."""
+        package = os.environ.get("PRE_ANDROID_PACKAGE", "")
+        sha256 = os.environ.get("PRE_ASSETLINKS_SHA256", "")
+        if not package or not sha256:
+            return []
+        return [
+            {
+                "relation": ["delegate_permission/common.handle_all_urls"],
+                "target": {
+                    "namespace": "android_app",
+                    "package_name": package,
+                    "sha256_cert_fingerprints": [sha256],
+                },
+            }
+        ]
+
+    @app.get("/api/push/vapid-public-key")
+    def api_vapid_key() -> dict[str, str]:
+        return {"public_key": vapid_public_key()}
+
+    @app.post("/api/push/subscribe")
+    def api_push_subscribe(payload: PushSubIn, request: Request) -> dict[str, Any]:
+        _require_token(request)
+        session, _tenant = _open_tenant(request)
+        try:
+            try:
+                row = add_subscription(session, payload.endpoint, payload.keys)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {"endpoint": row.endpoint}
+        finally:
+            session.close()
+
+    @app.post("/api/push/unsubscribe")
+    def api_push_unsubscribe(payload: PushSubIn, request: Request) -> dict[str, Any]:
+        _require_token(request)
+        session, _tenant = _open_tenant(request)
+        try:
+            remove_subscription(session, payload.endpoint)
+            return {"endpoint": payload.endpoint}
+        finally:
+            session.close()
+
+    @app.get("/api/push/status")
+    def api_push_status(request: Request) -> dict[str, Any]:
+        _require_token(request)
+        session, _tenant = _open_tenant(request)
+        try:
+            return {"subscriptions": [s.endpoint for s in list_subscriptions(session)]}
+        finally:
+            session.close()
+
+    @app.get("/api/push/quiet")
+    def api_push_quiet_get(request: Request) -> dict[str, int]:
+        _require_token(request)
+        session, _tenant = _open_tenant(request)
+        try:
+            start, end = get_quiet_hours(session)
+            return {"start_hour": start, "end_hour": end}
+        finally:
+            session.close()
+
+    @app.post("/api/push/quiet")
+    def api_push_quiet_set(payload: PushQuietIn, request: Request) -> dict[str, int]:
+        _require_token(request)
+        session, _tenant = _open_tenant(request)
+        try:
+            try:
+                set_quiet_hours(session, payload.start_hour, payload.end_hour)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            start, end = get_quiet_hours(session)
+            return {"start_hour": start, "end_hour": end}
         finally:
             session.close()
 
