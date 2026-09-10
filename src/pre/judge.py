@@ -25,6 +25,7 @@ from pre.cost_meter import (
 from pre.models import Change
 from pre.profile import get_row
 from pre.retrieval import ShortlistCandidate
+from pre.tenants import cap_for_session
 
 
 @dataclass(frozen=True)
@@ -182,7 +183,7 @@ class LLMJudge:
     def score(
         self, session: Session, change: Change, candidates: list[ShortlistCandidate]
     ) -> list[JudgeVerdict]:
-        enforce_budget(session)  # cap checked BEFORE the request goes out
+        enforce_budget(session, cap_cents=cap_for_session(session))  # tenant override wins
 
         contexts = {
             (c.entity_type, c.entity_id): _entity_context(session, c) for c in candidates

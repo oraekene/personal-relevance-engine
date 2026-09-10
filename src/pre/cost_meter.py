@@ -85,8 +85,10 @@ class CapStatus:
     should_warn: bool
 
 
-def check_cap(session: Session, now: datetime | None = None) -> CapStatus:
-    cap = monthly_cap_cents()
+def check_cap(
+    session: Session, now: datetime | None = None, cap_cents: int | None = None
+) -> CapStatus:
+    cap = cap_cents if cap_cents is not None else monthly_cap_cents()
     spent = month_to_date_cents(session, now)
     pct = spent / cap if cap > 0 else 1.0
     return CapStatus(
@@ -98,9 +100,9 @@ def check_cap(session: Session, now: datetime | None = None) -> CapStatus:
     )
 
 
-def enforce_budget(session: Session) -> CapStatus:
+def enforce_budget(session: Session, cap_cents: int | None = None) -> CapStatus:
     """Raise BudgetExceeded when the cap is spent; otherwise return status."""
-    status = check_cap(session)
+    status = check_cap(session, cap_cents=cap_cents)
     if status.exceeded:
         raise BudgetExceeded(
             f"monthly LLM cap spent: {status.spent_cents}/{status.cap_cents} cents"
@@ -108,8 +110,8 @@ def enforce_budget(session: Session) -> CapStatus:
     return status
 
 
-def render_costs(session: Session) -> str:
-    status = check_cap(session)
+def render_costs(session: Session, cap_cents: int | None = None) -> str:
+    status = check_cap(session, cap_cents=cap_cents)
     by_purpose: dict[str, float] = {}
     for row in session.scalars(
         select(LLMCallLog).where(LLMCallLog.called_at >= _month_start())

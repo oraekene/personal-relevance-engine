@@ -14,7 +14,7 @@ to database files plus browser sessions.
 | `PRE_GOOGLE_LOGIN_REDIRECT_URL` | Defaults to `http://127.0.0.1:8787/auth/google/callback`. |
 | `PRE_API_TOKEN` | Tenant bearer for `/api/*` and for minting assistant credentials. |
 | `PRE_OPERATOR_TOKEN` | Operator bearer for `GET /api/ops/tenants` (spend, cap, backup per tenant). Never share with tenants. |
-| `PRE_MONTHLY_CAP_CENTS` | Global monthly LLM cap (default 2000). Per-tenant override wins. |
+| `PRE_MONTHLY_CAP_CENTS` | Global monthly LLM cap (default 2000). Per-tenant override wins, and the judge enforces each tenant's effective cap. |
 
 ## Operate
 

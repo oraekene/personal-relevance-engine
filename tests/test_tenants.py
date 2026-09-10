@@ -410,7 +410,108 @@ def test_operator_rollup_rejects_single_tenant_mode(
 ) -> None:
     assert client_solo.get("/api/ops/tenants").status_code == 403
     monkeypatch.setenv("PRE_OPERATOR_TOKEN", "op-secret")
-    response = client_solo.get(
-        "/api/ops/tenants", headers={"authorization": "Bearer op-secret"}
-    )
+    response = client_solo.get("/api/ops/tenants", headers={"authorization": "Bearer op-secret"})
     assert response.status_code == 400
+
+
+def test_cap_for_session_prefers_override(
+    registry_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pre.tenants import cap_for_session, get_engine, get_registry, provision_sqlite_tenant
+
+    url = provision_sqlite_tenant(tmp_path / "tenants", "a@x.co")
+    probe = make_session_factory(get_engine(url))()
+    try:
+        assert cap_for_session(probe) == 2000  # no registry: legacy global default
+    finally:
+        probe.close()
+
+    from pre.tenants import register_tenant
+
+    monkeypatch.setenv("TENANT_REGISTRY_URL", registry_url)
+    reg = make_session_factory(get_registry(registry_url))()
+    try:
+        tenant = register_tenant(reg, "a@x.co", url)
+        tenant.cap_override_cents = 500
+        reg.commit()
+    finally:
+        reg.close()
+
+    probe = make_session_factory(get_engine(url))()
+    try:
+        assert cap_for_session(probe) == 500
+    finally:
+        probe.close()
+
+
+def test_judge_enforces_tenant_override(
+    registry_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pre.cost_meter import BudgetExceeded, CallRecord, log_call
+    from pre.judge import LLMJudge
+    from pre.models import Change
+    from pre.tenants import get_engine, get_registry, provision_sqlite_tenant, register_tenant
+
+    monkeypatch.setenv("PRE_MONTHLY_CAP_CENTS", "100")
+    monkeypatch.setenv("TENANT_REGISTRY_URL", registry_url)
+    monkeypatch.setenv("PRE_LLM_API_KEY", "test")
+    url = provision_sqlite_tenant(tmp_path / "tenants", "a@x.co")
+    reg = make_session_factory(get_registry(registry_url))()
+    try:
+        tenant = register_tenant(reg, "a@x.co", url)
+        tenant.cap_override_cents = 10000
+        reg.commit()
+    finally:
+        reg.close()
+
+    db = make_session_factory(get_engine(url))()
+    try:
+        log_call(
+            db,
+            CallRecord(
+                purpose="judge", model="gpt-4o-mini",
+                prompt_tokens=0, completion_tokens=0, cost_usd_cents=150.0,
+            ),
+        )
+        change = Change(
+            product_name="P", title="T", change_type="feature", fingerprint="fp-1"
+        )
+        db.add(change)
+        db.commit()
+
+        judge = LLMJudge(api_key="test")
+        monkeypatch.setattr(judge, "_complete", lambda prompt: ('{"verdicts": []}', 10, 5))
+        judge.score(db, change, [])  # 150 spent: over global 100, under override
+
+        reg_session = make_session_factory(get_registry(registry_url))()
+        try:
+            row = reg_session.scalars(select(Tenant)).one()
+            row.cap_override_cents = 120
+            reg_session.commit()
+        finally:
+            reg_session.close()
+        with pytest.raises(BudgetExceeded):
+            judge.score(db, change, [])
+    finally:
+        db.close()
+
+
+def test_costs_command_shows_override(
+    registry_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from pre.cli import main
+    from pre.tenants import get_registry, provision_sqlite_tenant, register_tenant
+
+    monkeypatch.setenv("TENANT_REGISTRY_URL", registry_url)
+    url = provision_sqlite_tenant(tmp_path / "tenants", "a@x.co")
+    reg = make_session_factory(get_registry(registry_url))()
+    try:
+        tenant = register_tenant(reg, "a@x.co", url)
+        tenant.cap_override_cents = 500
+        reg.commit()
+    finally:
+        reg.close()
+
+    assert main(["costs", "--db", url]) == 0
+    assert "/ 500 cents" in capsys.readouterr().out

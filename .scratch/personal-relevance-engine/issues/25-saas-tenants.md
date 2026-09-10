@@ -41,4 +41,6 @@ Central registry database (tenants + opaque browser sessions, instant revocation
 
 Landed: cap-override tests + operator rollup tests (commit 2), isolation
 suite `tests/test_tenant_isolation.py` (commit 3), `docs/deploy-saas.md` plus
-`provision-tenant --cap-override-cents` (commit 4). Suite green.
+`provision-tenant --cap-override-cents` (commit 4). Follow-up closed:
+`cap_for_session` threads the override into judge enforcement and the
+costs/judge display (global default untouched without a registry). Suite green.

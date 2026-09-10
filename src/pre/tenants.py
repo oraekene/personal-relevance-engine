@@ -136,6 +136,28 @@ def effective_cap_cents(tenant: Tenant | None) -> int:
     return monthly_cap_cents()
 
 
+def cap_for_session(session: Session, registry_url: str | None = None) -> int:
+    """Monthly cap for the database behind this session.
+
+    Multi-tenant mode (registry configured) with a matching tenant row: that
+    tenant's override wins. Anything else: the global default (legacy intact).
+    """
+    from pre.cost_meter import monthly_cap_cents
+
+    if registry_url is None:
+        registry_url = os.environ.get("TENANT_REGISTRY_URL", "") or None
+    bind = session.get_bind()
+    url = str(bind.url) if isinstance(bind, Engine) else ""
+    if not registry_url or not url:
+        return monthly_cap_cents()
+    registry = make_session_factory(get_registry(registry_url))()
+    try:
+        tenant = registry.scalar(select(Tenant).where(Tenant.db_url == url))
+    finally:
+        registry.close()
+    return effective_cap_cents(tenant)
+
+
 def open_request_session(
     cookies: Mapping[str, str],
     default_factory: Callable[[], Session],
@@ -219,6 +241,7 @@ __all__ = [
     "SESSION_TTL_DAYS",
     "LoginRequired",
     "Tenant",
+    "cap_for_session",
     "clear_engine_cache",
     "create_session_token",
     "destroy_session",

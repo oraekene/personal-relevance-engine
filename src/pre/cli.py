@@ -467,7 +467,9 @@ def _cmd_judge(args: argparse.Namespace) -> int:
         else:
             judge = _DemoJudge()
         written = judge_change(session, args.change_id, judge, top_k=args.top)
-        status = check_cap(session)
+        from pre.tenants import cap_for_session
+
+        status = check_cap(session, cap_cents=cap_for_session(session))
         print(
             f"Judged change #{args.change_id}: {written} scores stored. "
             f"Spend MTD {status.spent_cents}/{status.cap_cents} cents "
@@ -486,9 +488,11 @@ def _cmd_judge(args: argparse.Namespace) -> int:
 
 
 def _cmd_costs(args: argparse.Namespace) -> int:
+    from pre.tenants import cap_for_session
+
     session = _open_session(args.db)
     try:
-        print(render_costs(session))
+        print(render_costs(session, cap_cents=cap_for_session(session)))
         return 0
     finally:
         session.close()
