@@ -1,4 +1,4 @@
-"""Ticket 25 commit 1: registry, Google login, provisioning, routing. No live Google."""
+"""Ticket 25 commits 1-2: registry, login, routing, caps, operator rollup."""
 
 from __future__ import annotations
 
@@ -295,3 +295,122 @@ def test_cli_provision_tenant(tmp_path: Path, registry_url: str) -> None:
         reg.close()
 
     assert main(["provision-tenant", "--email", "x@y.co", "--db-url", "sqlite:///x.db"]) == 1
+
+
+def test_cli_provision_tenant_cap_override(tmp_path: Path, registry_url: str) -> None:
+    from pre.cli import main
+    from pre.db import make_session_factory
+    from pre.tenants import effective_cap_cents, get_registry
+
+    assert main([
+        "provision-tenant", "--email", "cap@example.com",
+        "--db-url", "sqlite:///cap.db", "--registry", registry_url,
+        "--cap-override-cents", "500",
+    ]) == 0
+    reg = make_session_factory(get_registry(registry_url))()
+    try:
+        tenant = reg.scalars(select(Tenant)).one()
+        assert tenant.cap_override_cents == 500
+        assert effective_cap_cents(tenant) == 500
+    finally:
+        reg.close()
+
+    # Re-provisioning the same email updates the cap but never repoints the DB.
+    assert main([
+        "provision-tenant", "--email", "cap@example.com",
+        "--db-url", "sqlite:///other.db", "--registry", registry_url,
+        "--cap-override-cents", "900",
+    ]) == 0
+    reg = make_session_factory(get_registry(registry_url))()
+    try:
+        tenant = reg.scalars(select(Tenant)).one()
+        assert tenant.db_url == "sqlite:///cap.db"
+        assert tenant.cap_override_cents == 900
+    finally:
+        reg.close()
+
+
+def test_effective_cap_prefers_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pre.cost_meter import DEFAULT_MONTHLY_CAP_CENTS
+    from pre.models import Tenant
+    from pre.tenants import effective_cap_cents
+
+    monkeypatch.setenv("PRE_MONTHLY_CAP_CENTS", "7777")
+
+    assert effective_cap_cents(None) == 7777
+    plain = Tenant(email="a@x.co", db_url="sqlite:///a.db", cap_override_cents=None)
+    assert effective_cap_cents(plain) == 7777
+    boosted = Tenant(email="b@x.co", db_url="sqlite:///b.db", cap_override_cents=500)
+    assert effective_cap_cents(boosted) == 500
+    assert DEFAULT_MONTHLY_CAP_CENTS == 2000
+
+
+def _seed_spend(url: str, cents: float, backup: bool = False) -> None:
+    from pre.cost_meter import CallRecord, log_call
+    from pre.ops import mark_backup
+    from pre.tenants import get_engine
+
+    factory = make_session_factory(get_engine(url))
+    db = factory()
+    try:
+        log_call(
+            db,
+            CallRecord(
+                purpose="judge", model="gpt-4o-mini",
+                prompt_tokens=0, completion_tokens=0, cost_usd_cents=cents,
+            ),
+        )
+        if backup:
+            mark_backup(db)
+    finally:
+        db.close()
+
+
+def test_operator_rollup_reports_spend_and_caps(
+    tclient, registry_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pre.tenants import get_registry, provision_sqlite_tenant, register_tenant
+
+    monkeypatch.setenv("PRE_OPERATOR_TOKEN", "op-secret")
+    monkeypatch.setenv("PRE_MONTHLY_CAP_CENTS", "7777")
+    reg = make_session_factory(get_registry(registry_url))()
+    try:
+        url_a = provision_sqlite_tenant(tmp_path / "tenants", "a@x.co")
+        url_b = provision_sqlite_tenant(tmp_path / "tenants", "b@x.co")
+        tenant_a = register_tenant(reg, "a@x.co", url_a)
+        register_tenant(reg, "b@x.co", url_b)
+        tenant_a.cap_override_cents = 500
+        reg.commit()
+    finally:
+        reg.close()
+    _seed_spend(url_a, 100.0, backup=True)
+    _seed_spend(url_b, 25.0)
+
+    denied = tclient.get("/api/ops/tenants")
+    assert denied.status_code == 403
+    wrong = tclient.get("/api/ops/tenants", headers={"authorization": "Bearer nope"})
+    assert wrong.status_code == 403
+    monkeypatch.setenv("PRE_API_TOKEN", "tenant-token")
+    cross = tclient.get("/api/ops/tenants", headers={"authorization": "Bearer tenant-token"})
+    assert cross.status_code == 403
+
+    response = tclient.get("/api/ops/tenants", headers={"authorization": "Bearer op-secret"})
+    assert response.status_code == 200
+    rows = {row["email"]: row for row in response.json()["tenants"]}
+    assert rows["a@x.co"]["spent_cents"] == 100.0
+    assert rows["a@x.co"]["cap_cents"] == 500
+    assert rows["a@x.co"]["last_backup"] is not None
+    assert rows["b@x.co"]["spent_cents"] == 25.0
+    assert rows["b@x.co"]["cap_cents"] == 7777
+    assert rows["b@x.co"]["last_backup"] is None
+
+
+def test_operator_rollup_rejects_single_tenant_mode(
+    client_solo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert client_solo.get("/api/ops/tenants").status_code == 403
+    monkeypatch.setenv("PRE_OPERATOR_TOKEN", "op-secret")
+    response = client_solo.get(
+        "/api/ops/tenants", headers={"authorization": "Bearer op-secret"}
+    )
+    assert response.status_code == 400

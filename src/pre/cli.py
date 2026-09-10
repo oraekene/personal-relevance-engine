@@ -195,6 +195,8 @@ def _build_parser() -> argparse.ArgumentParser:
     prov_tenant.add_argument("--email", required=True)
     prov_tenant.add_argument("--db-url", required=True)
     prov_tenant.add_argument("--registry", default=None)
+    prov_tenant.add_argument("--cap-override-cents", type=int, default=None,
+                             help="per-tenant monthly LLM cap (omit for the global default)")
 
     sync = sub.add_parser(
         "sync-live", help="Pull connected Google services (OAuth) into the queue"
@@ -715,6 +717,10 @@ def _cmd_provision_tenant(args: argparse.Namespace) -> int:
     session = make_session_factory(get_registry(registry_url))()
     try:
         tenant = register_tenant(session, args.email, args.db_url)
+        if args.cap_override_cents is not None:
+            tenant.cap_override_cents = args.cap_override_cents
+            session.commit()
+            print(f"Tenant {tenant.email} capped at {args.cap_override_cents} cents/month.")
         print(f"Tenant {tenant.email} registered (db {tenant.db_url}).")
         return 0
     except ValueError as exc:

@@ -37,4 +37,8 @@ Central registry database (tenants + opaque browser sessions, instant revocation
 - Billing and payments — first paid tier.
 - Email+password or magic-link login — fallback only.
 
-**Status:** ready-for-agent
+**Status:** resolved
+
+Landed: cap-override tests + operator rollup tests (commit 2), isolation
+suite `tests/test_tenant_isolation.py` (commit 3), `docs/deploy-saas.md` plus
+`provision-tenant --cap-override-cents` (commit 4). Suite green.
